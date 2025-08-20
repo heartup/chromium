@@ -6,11 +6,16 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_JSON_WS_JSON_WS_SENDER_H_
 
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/mojom/websocket.mojom-blink.h"
+#include "third_party/blink/public/mojom/websockets/websocket_connector.mojom-blink.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
+#include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -55,6 +60,9 @@ class MODULES_EXPORT JSONWebSocketSender final
   void ContextDestroyed() override;
 
   // WebSocketHandshakeClient implementation
+  void OnOpeningHandshakeStarted(
+      network::mojom::blink::WebSocketHandshakeRequestPtr request) override;
+      
   void OnConnectionEstablished(
       mojo::PendingRemote<network::mojom::blink::WebSocket> websocket,
       mojo::PendingReceiver<network::mojom::blink::WebSocketClient> client_receiver,
@@ -63,8 +71,8 @@ class MODULES_EXPORT JSONWebSocketSender final
       mojo::ScopedDataPipeProducerHandle writable) override;
 
   void OnFailure(const String& message,
-                 uint16_t code,
-                 const String& reason) override;
+                 int32_t net_error,
+                 int32_t response_code) override;
 
  private:
   enum class State {
@@ -75,14 +83,16 @@ class MODULES_EXPORT JSONWebSocketSender final
   };
 
   void ConnectWebSocket(const KURL& url);
-  void OnWebSocketConnected();
   void OnWebSocketError();
+  void SendDataThroughPipe(const String& data);
 
   State state_ = State::kDisconnected;
   String websocket_url_;
   
-  mojo::Remote<network::mojom::blink::WebSocket> websocket_;
-  mojo::Receiver<network::mojom::blink::WebSocketClient> client_receiver_{this};
+  HeapMojoRemote<network::mojom::blink::WebSocket> websocket_;
+  HeapMojoReceiver<network::mojom::blink::WebSocketHandshakeClient, JSONWebSocketSender> handshake_receiver_;
+  
+  mojo::ScopedDataPipeProducerHandle data_pipe_producer_;
 };
 
 }  // namespace blink

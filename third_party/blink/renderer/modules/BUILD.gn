@@ -163,6 +163,7 @@ component("modules") {
     "//third_party/blink/renderer/modules/webrtc",
     "//third_party/blink/renderer/modules/webshare",
     "//third_party/blink/renderer/modules/websockets",
+    "//third_party/blink/renderer/modules/json_ws",
     "//third_party/blink/renderer/modules/webtransport",
     "//third_party/blink/renderer/modules/webusb",
     "//third_party/blink/renderer/modules/worklet",

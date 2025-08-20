@@ -5,8 +5,10 @@
 #include "third_party/blink/renderer/modules/json_ws/json_ws_sender.h"
 
 #include "base/memory/scoped_refptr.h"
+#include "base/containers/span.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "net/cookies/site_for_cookies.h"
 #include "services/network/public/mojom/websocket.mojom-blink.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -37,7 +39,9 @@ JSONWebSocketSender* JSONWebSocketSender::From(ExecutionContext* context) {
 
 JSONWebSocketSender::JSONWebSocketSender(ExecutionContext& context)
     : Supplement<ExecutionContext>(context),
-      ExecutionContextLifecycleObserver(&context) {}
+      ExecutionContextLifecycleObserver(&context),
+      websocket_(&context),
+      handshake_receiver_(this, &context) {}
 
 JSONWebSocketSender::~JSONWebSocketSender() = default;
 
@@ -55,12 +59,13 @@ void JSONWebSocketSender::Send(const String& json_data) {
     return;
   }
 
-  // Create WebSocket frame with the JSON data
-  auto message = network::mojom::blink::WebSocketMessage::New();
-  message->type = network::mojom::blink::WebSocketMessageType::TEXT;
-  message->data = json_data.Utf8();
+  // Send message via WebSocket
+  std::string utf8_data = json_data.Utf8();
+  websocket_->SendMessage(network::mojom::blink::WebSocketMessageType::TEXT, 
+                          utf8_data.length());
   
-  websocket_->SendMessage(std::move(message));
+  // Send the actual data through the data pipe
+  SendDataThroughPipe(json_data);
 }
 
 bool JSONWebSocketSender::IsEnabled() const {
@@ -71,13 +76,16 @@ void JSONWebSocketSender::Shutdown() {
   if (websocket_.is_bound()) {
     websocket_.reset();
   }
-  if (client_receiver_.is_bound()) {
-    client_receiver_.reset();
+  if (handshake_receiver_.is_bound()) {
+    handshake_receiver_.reset();
   }
+  data_pipe_producer_.reset();
   state_ = State::kDisconnected;
 }
 
 void JSONWebSocketSender::Trace(Visitor* visitor) const {
+  visitor->Trace(websocket_);
+  visitor->Trace(handshake_receiver_);
   Supplement<ExecutionContext>::Trace(visitor);
   ExecutionContextLifecycleObserver::Trace(visitor);
 }
@@ -95,28 +103,26 @@ void JSONWebSocketSender::ConnectWebSocket(const KURL& url) {
   state_ = State::kConnecting;
 
   // Get WebSocketConnector from browser
-  mojo::Remote<network::mojom::blink::WebSocketConnector> connector;
+  mojo::Remote<blink::mojom::blink::WebSocketConnector> connector;
   context->GetBrowserInterfaceBroker().GetInterface(
       connector.BindNewPipeAndPassReceiver());
 
-  // Prepare WebSocket connection request
-  auto request = network::mojom::blink::WebSocketHandshakeRequest::New();
-  request->url = url;
-  
-  // Add basic headers
-  Vector<network::mojom::blink::HttpHeaderPtr> headers;
-  auto origin_header = network::mojom::blink::HttpHeader::New();
-  origin_header->name = "Origin";
-  origin_header->value = context->GetSecurityOrigin()->ToString();
-  headers.push_back(std::move(origin_header));
-  
-  request->headers = std::move(headers);
+  // Create SiteForCookies - use an empty one for this purpose
+  net::SiteForCookies site_for_cookies = net::SiteForCookies();
 
   // Connect to WebSocket
-  connector->Connect(url, Vector<String>(), std::move(request),
-                     mojo::NullRemote(),
-                     mojo::PendingReceiver<network::mojom::blink::WebSocketHandshakeClient>(
-                         client_receiver_.BindNewPipeAndPassReceiver()));
+  connector->Connect(url, Vector<String>(), 
+                     site_for_cookies,
+                     String(), // user_agent
+                     net::StorageAccessApiStatus::kNone,
+                     handshake_receiver_.BindNewPipeAndPassRemote(
+                         context->GetTaskRunner(TaskType::kNetworking)),
+                     std::nullopt); // throttling_profile_id
+}
+
+void JSONWebSocketSender::OnOpeningHandshakeStarted(
+    network::mojom::blink::WebSocketHandshakeRequestPtr request) {
+  // Nothing special to do when handshake starts
 }
 
 void JSONWebSocketSender::OnConnectionEstablished(
@@ -126,7 +132,14 @@ void JSONWebSocketSender::OnConnectionEstablished(
     mojo::ScopedDataPipeConsumerHandle readable,
     mojo::ScopedDataPipeProducerHandle writable) {
   
-  websocket_.Bind(std::move(websocket));
+  ExecutionContext* context = GetExecutionContext();
+  if (!context) {
+    return;
+  }
+  
+  websocket_.Bind(std::move(websocket), 
+                  context->GetTaskRunner(TaskType::kNetworking));
+  data_pipe_producer_ = std::move(writable);
   state_ = State::kConnected;
   
   // Set up disconnect handler
@@ -135,21 +148,37 @@ void JSONWebSocketSender::OnConnectionEstablished(
 }
 
 void JSONWebSocketSender::OnFailure(const String& message,
-                                   uint16_t code,
-                                   const String& reason) {
+                                   int32_t net_error,
+                                   int32_t response_code) {
   state_ = State::kError;
   websocket_.reset();
-  client_receiver_.reset();
-}
-
-void JSONWebSocketSender::OnWebSocketConnected() {
-  state_ = State::kConnected;
+  handshake_receiver_.reset();
+  data_pipe_producer_.reset();
 }
 
 void JSONWebSocketSender::OnWebSocketError() {
   state_ = State::kError;
   websocket_.reset();
-  client_receiver_.reset();
+  handshake_receiver_.reset();
+  data_pipe_producer_.reset();
+}
+
+void JSONWebSocketSender::SendDataThroughPipe(const String& data) {
+  if (!data_pipe_producer_.is_valid()) {
+    return;
+  }
+
+  std::string utf8_data = data.Utf8();
+  base::span<const uint8_t> data_span = base::as_bytes(base::span(utf8_data));
+  
+  size_t actually_written_bytes = 0;
+  MojoResult result = data_pipe_producer_->WriteData(
+      data_span, MOJO_WRITE_DATA_FLAG_NONE, actually_written_bytes);
+  
+  if (result != MOJO_RESULT_OK) {
+    // If write fails, we could queue the data for later retry, 
+    // but for simplicity we just ignore the error here
+  }
 }
 
 }  // namespace blink

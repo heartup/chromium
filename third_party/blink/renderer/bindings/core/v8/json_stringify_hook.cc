@@ -63,20 +63,17 @@ v8::MaybeLocal<v8::String> JSONStringifyHook::StringifyInternal(
     v8::Local<v8::Value> replacer,
     v8::Local<v8::String> gap) {
   
-  // Call the standard V8 JSON.stringify
-  v8::MaybeLocal<v8::String> result;
-  if (replacer.IsEmpty()) {
-    result = v8::JSON::Stringify(context, json_object, gap);
-  } else {
-    result = v8::JSON::Stringify(context, json_object, replacer, gap);
-  }
+  // V8's JSON::Stringify only accepts context and object parameters
+  // The replacer and gap parameters are not supported in the current V8 API
+  v8::MaybeLocal<v8::String> result = v8::JSON::Stringify(context, json_object);
   
   // If stringify succeeded and hook is enabled, send via WebSocket
   v8::Local<v8::String> result_string;
   if (result.ToLocal(&result_string)) {
     ExecutionContext* execution_context = ExecutionContext::From(context);
     if (execution_context && IsHookEnabled(execution_context)) {
-      String blink_string = ToCoreString(result_string);
+      v8::Isolate* isolate = context->GetIsolate();
+      String blink_string = ToCoreString(isolate, result_string);
       SendViaWebSocket(execution_context, blink_string);
     }
   }

@@ -44,8 +44,6 @@ blink_core_sources_bindings =
                     "core/v8/iterable.h",
                     "core/v8/js_based_event_listener.cc",
                     "core/v8/js_based_event_listener.h",
-                    "core/v8/json_stringify_hook.cc",
-                    "core/v8/json_stringify_hook.h",
                     "core/v8/js_event_handler.cc",
                     "core/v8/js_event_handler.h",
                     "core/v8/js_event_handler_for_content_attribute.cc",
