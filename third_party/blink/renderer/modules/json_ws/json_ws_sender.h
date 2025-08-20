@@ -10,6 +10,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/mojom/websocket.mojom-blink.h"
 #include "third_party/blink/public/mojom/websockets/websocket_connector.mojom-blink.h"
+#include "third_party/blink/renderer/bindings/core/v8/json_stringify_hook.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -24,16 +25,19 @@ namespace blink {
 class ExecutionContext;
 class KURL;
 
-// JSONWebSocketSender manages a WebSocket connection for sending JSON data.
-// It's implemented as a Supplement to ExecutionContext, so each context
-// can have its own sender instance.
+// JSONWebSocketSender implements the interface defined in core
+// and manages a WebSocket connection for sending JSON data.
 class MODULES_EXPORT JSONWebSocketSender final
     : public GarbageCollected<JSONWebSocketSender>,
+      public JSONWebSocketSenderInterface,
       public Supplement<ExecutionContext>,
       public ExecutionContextLifecycleObserver,
       public network::mojom::blink::WebSocketHandshakeClient {
  public:
   static const char kSupplementName[];
+  
+  // Factory function for the registry
+  static JSONWebSocketSenderInterface* CreateForContext(ExecutionContext* context);
   
   // Get or create the JSONWebSocketSender for the given ExecutionContext
   static JSONWebSocketSender* From(ExecutionContext* context);
@@ -41,17 +45,11 @@ class MODULES_EXPORT JSONWebSocketSender final
   explicit JSONWebSocketSender(ExecutionContext& context);
   ~JSONWebSocketSender() override;
 
-  // Initialize WebSocket connection to the specified URL
-  void Initialize(const String& websocket_url);
-
-  // Send JSON string through the WebSocket connection
-  void Send(const String& json_data);
-
-  // Check if the sender is enabled and connected
-  bool IsEnabled() const;
-
-  // Shutdown the WebSocket connection
-  void Shutdown();
+  // JSONWebSocketSenderInterface implementation
+  void Initialize(const String& websocket_url) override;
+  void Send(const String& json_data) override;
+  bool IsEnabled() const override;
+  void Shutdown() override;
 
   // GarbageCollected implementation
   void Trace(Visitor* visitor) const override;

@@ -22,6 +22,27 @@ namespace blink {
 
 const char JSONWebSocketSender::kSupplementName[] = "JSONWebSocketSender";
 
+// Lazy initialization to avoid global constructor
+namespace {
+void EnsureFactoryRegistered() {
+  static bool registered = false;
+  if (!registered) {
+    JSONWebSocketSenderRegistry::RegisterSenderFactory(
+        &JSONWebSocketSender::CreateForContext);
+    registered = true;
+  }
+}
+}  // namespace
+
+// static
+JSONWebSocketSenderInterface* JSONWebSocketSender::CreateForContext(ExecutionContext* context) {
+  EnsureFactoryRegistered();
+  if (!context) {
+    return nullptr;
+  }
+  return From(context);
+}
+
 // static
 JSONWebSocketSender* JSONWebSocketSender::From(ExecutionContext* context) {
   if (!context) {

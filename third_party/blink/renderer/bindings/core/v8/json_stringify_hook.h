@@ -6,12 +6,37 @@
 #define THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_JSON_STRINGIFY_HOOK_H_
 
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "v8/include/v8.h"
 
 namespace blink {
 
 class ExecutionContext;
+
+// Interface for JSON WebSocket senders to avoid direct dependency on modules
+// This is NOT a GarbageCollected class - implementations will handle GC
+class CORE_EXPORT JSONWebSocketSenderInterface {
+ public:
+  virtual ~JSONWebSocketSenderInterface() = default;
+  virtual void Initialize(const String& websocket_url) = 0;
+  virtual void Send(const String& json_data) = 0;
+  virtual bool IsEnabled() const = 0;
+  virtual void Shutdown() = 0;
+};
+
+// Registry for JSON WebSocket senders - allows modules to register implementations
+class CORE_EXPORT JSONWebSocketSenderRegistry {
+ public:
+  using CreateSenderCallback = 
+      JSONWebSocketSenderInterface* (*)(ExecutionContext* context);
+  
+  static void RegisterSenderFactory(CreateSenderCallback callback);
+  static JSONWebSocketSenderInterface* CreateSender(ExecutionContext* context);
+  
+ private:
+  static CreateSenderCallback sender_factory_;
+};
 
 // JSONStringifyHook provides a centralized point for all JSON.stringify operations
 // in Blink. It wraps the standard v8::JSON::Stringify call and optionally sends
