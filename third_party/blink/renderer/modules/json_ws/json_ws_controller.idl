@@ -6,8 +6,8 @@
   Exposed=Window,
   RuntimeEnabled=JSONWebSocketHook
 ] interface JSONWebSocketController {
-  void enableHook(DOMString websocketUrl);
+  void enableHook(USVString websocketUrl);
   void disableHook();
   boolean isHookEnabled();
-  DOMString getWebSocketUrl();
+  USVString getWebSocketUrl();
 };

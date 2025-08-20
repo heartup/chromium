@@ -5788,7 +5788,10 @@
       // A feature flag that controls whether XSLT is supported by the browser.
       // crbug.com/435623334.
       name: "XSLT",
-      status: "stable",
+    },
+    {
+      name: "JSONWebSocketHook",
+      status: "test",
     },
     {
       // If enabled, the `getDisplayMedia()` family of APIs will ask for NV12
