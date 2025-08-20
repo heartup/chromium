@@ -3088,8 +3088,7 @@ deps = {
       'condition': 'checkout_mac',
   },
 
-  'src/v8':
-    Var('chromium_git') + '/v8/v8.git' + '@' +  Var('v8_revision'),
+  'src/v8': 'https://github.com/heartup/v8.git@v8-14.1.67-chrome-141.0.7357.0',
 
 # See checkout_src_internal_infra declaration.
 # LINT.IfChange
