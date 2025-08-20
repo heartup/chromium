@@ -1,0 +1,23 @@
+# Copyright 2024 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//third_party/blink/renderer/modules/modules.gni")
+
+blink_modules_sources("json_ws") {
+  sources = [
+    "json_ws_controller.cc",
+    "json_ws_controller.h",
+    "json_ws_controller_global_scope.cc",
+    "json_ws_controller_global_scope.h",
+    "json_ws_sender.cc", 
+    "json_ws_sender.h",
+  ]
+
+  deps = [
+    "//mojo/public/cpp/bindings",
+    "//services/network/public/mojom:websocket_mojom_blink",
+    "//third_party/blink/renderer/core",
+    "//third_party/blink/renderer/platform",
+  ]
+}
