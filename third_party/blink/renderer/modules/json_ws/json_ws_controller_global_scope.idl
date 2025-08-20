@@ -3,8 +3,7 @@
 // found in the LICENSE file.
 
 [
-  ImplementedAs=JSONWebSocketControllerGlobalScope,
   RuntimeEnabled=JSONWebSocketHook
 ] partial interface Window {
-  [SameObject] readonly attribute JSONWebSocketController __jsonWsController;
+  [SameObject] readonly attribute JSONWebSocketController jsonWsController;
 };

@@ -405,6 +405,8 @@ static_idl_files_in_modules = [
   "//third_party/blink/renderer/modules/keyboard/keyboard.idl",
   "//third_party/blink/renderer/modules/keyboard/keyboard_layout_map.idl",
   "//third_party/blink/renderer/modules/keyboard/navigator_keyboard.idl",
+  "//third_party/blink/renderer/modules/json_ws/json_ws_controller.idl",
+  "//third_party/blink/renderer/modules/json_ws/json_ws_controller_global_scope.idl",
   "//third_party/blink/renderer/modules/launch/dom_window_launch_queue.idl",
   "//third_party/blink/renderer/modules/launch/launch_params.idl",
   "//third_party/blink/renderer/modules/launch/launch_queue.idl",

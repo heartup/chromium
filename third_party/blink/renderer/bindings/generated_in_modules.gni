@@ -2480,6 +2480,8 @@ generated_interface_sources_in_modules = [
   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_layout_worklet_global_scope.h",
   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_linear_acceleration_sensor.cc",
   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_linear_acceleration_sensor.h",
+  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_js_on_websocket_controller.cc",
+  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_js_on_websocket_controller.h",
   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_lock.cc",
   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_lock.h",
   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_locked_mode.cc",
