@@ -20,17 +20,20 @@ void JSONMonitor::Initialize(RenderFrameImpl* render_frame) {
     v8::JSON::SetJSONStringifyCallback(&JSONMonitor::OnJSONStringify, render_frame);
     
     // 初始化WebSocket连接
-    websocket_client_ = new blink::internal::WebSocketClient();
-    websocket_client_->Connect("127.0.0.1", 8080, "/");
+    // websocket_client_ = new blink::internal::WebSocketClient();
+    // websocket_client_->Connect("127.0.0.1", 8080, "/");
 }
 
 void JSONMonitor::OnJSONStringify(const std::string& json_content, void* user_data) {
     // 在Blink线程中处理WebSocket发送
-    RenderFrameImpl* render_frame = static_cast<RenderFrameImpl*>(user_data);
-    render_frame->GetTaskRunner(blink::TaskType::kInternalTest)->PostTask(
-        FROM_HERE, base::BindOnce(&JSONMonitor::SendToWebSocket, json_content));
+    // RenderFrameImpl* render_frame = static_cast<RenderFrameImpl*>(user_data);
+    // render_frame->GetTaskRunner(blink::TaskType::kInternalTest)->PostTask(
+    //     FROM_HERE, base::BindOnce(&JSONMonitor::SendToWebSocket, json_content));
+    printf("---------------------------------\n");
+    printf("json_content: %s\n", json_content.c_str());
+    printf("---------------------------------\n");
 }
-    
+
 void JSONMonitor::SendToWebSocket(const std::string& json_content) {
     if (websocket_client_ && websocket_client_->IsConnected()) {
         websocket_client_->SendMessage(json_content);
