@@ -39,6 +39,10 @@ JSONMonitorObserver::JSONMonitorObserver(RenderFrame* render_frame)
 
 JSONMonitorObserver::~JSONMonitorObserver() = default;
 
+void JSONMonitorObserver::OnDestruct() {
+  delete this;
+}
+
 void JSONMonitorObserver::DidCreateScriptContext(v8::Local<v8::Context> context, 
                                                  int world_id) {
   // 只在主世界中初始化一次
