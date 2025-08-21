@@ -2029,7 +2029,7 @@ void RenderFrameImpl::Initialize(blink::WebFrame* parent) {
   }
 
   // 添加JSONMonitorObserver
-  observers_.AddObserver(std::make_unique<JSONMonitorObserver>(this));
+  observers_.AddObserver(new JSONMonitorObserver(this));
 
   // blink::AudioOutputIPCFactory::io_task_runner_ may be null in tests.
   auto& factory = blink::AudioOutputIPCFactory::GetInstance();
