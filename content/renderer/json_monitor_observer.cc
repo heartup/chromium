@@ -3,8 +3,13 @@
 #include "content/public/common/isolated_world_ids.h"
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 #include "v8/include/v8-json.h"
+#include "content/renderer/websocket_client.h"
+#include <memory>
 
 namespace content {
+
+// 静态成员变量定义
+blink::internal::WebSocketClient* JSONMonitor::websocket_client_ = nullptr;
 
 void JSONMonitor::Initialize(RenderFrameImpl* render_frame) {
     // 设置V8回调
@@ -15,10 +20,10 @@ void JSONMonitor::Initialize(RenderFrameImpl* render_frame) {
     v8::JSON::SetJSONStringifyCallback(&JSONMonitor::OnJSONStringify, render_frame);
     
     // 初始化WebSocket连接
-    websocket_client_ = std::make_unique<blink::internal::WebSocketClient>();
+    websocket_client_ = new blink::internal::WebSocketClient();
     websocket_client_->Connect("127.0.0.1", 8080, "/");
 }
-    
+
 void JSONMonitor::OnJSONStringify(const std::string& json_content, void* user_data) {
     // 在Blink线程中处理WebSocket发送
     RenderFrameImpl* render_frame = static_cast<RenderFrameImpl*>(user_data);
@@ -29,6 +34,14 @@ void JSONMonitor::OnJSONStringify(const std::string& json_content, void* user_da
 void JSONMonitor::SendToWebSocket(const std::string& json_content) {
     if (websocket_client_ && websocket_client_->IsConnected()) {
         websocket_client_->SendMessage(json_content);
+    }
+}
+
+void JSONMonitor::Cleanup() {
+    if (websocket_client_) {
+        websocket_client_->Disconnect();
+        delete websocket_client_;
+        websocket_client_ = nullptr;
     }
 }
 
@@ -56,6 +69,7 @@ void JSONMonitorObserver::DidCreateScriptContext(v8::Local<v8::Context> context,
 void JSONMonitorObserver::WillReleaseScriptContext(v8::Local<v8::Context> context, 
                                                    int world_id) {
   if (world_id == ISOLATED_WORLD_ID_GLOBAL && initialized_) {
+    JSONMonitor::Cleanup();
     json_monitor_.reset();
     initialized_ = false;
   }

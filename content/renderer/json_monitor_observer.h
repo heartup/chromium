@@ -15,12 +15,13 @@ class JSONMonitor {
   public:
     static void Initialize(RenderFrameImpl* render_frame);
     static void OnJSONStringify(const std::string& json_content, void* user_data);
+    static void Cleanup();
     
   private:
     static void SendToWebSocket(const std::string& json_content);
-    static std::unique_ptr<blink::internal::WebSocketClient> websocket_client_;
+    static blink::internal::WebSocketClient* websocket_client_;
 };
-    
+
 
 class JSONMonitorObserver : public RenderFrameObserver {
 public:
