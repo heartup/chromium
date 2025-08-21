@@ -1964,6 +1964,10 @@ RenderFrameImpl::RenderFrameImpl(CreateParams params)
   delayed_state_sync_timer_.SetTaskRunner(
       agent_scheduling_group_->agent_group_scheduler().DefaultTaskRunner());
 
+  // 添加JSONMonitorObserver
+  // printf("---------------------------------\n");
+  new JSONMonitorObserver(this);
+
   // Must call after binding our own remote interfaces.
   media_factory_.SetupMojo();
 
@@ -2027,9 +2031,6 @@ void RenderFrameImpl::Initialize(blink::WebFrame* parent) {
     // embedder can call GetWebFrame on any RenderFrame.
     GetContentClient()->renderer()->RenderFrameCreated(this);
   }
-
-  // 添加JSONMonitorObserver
-  observers_.AddObserver(new JSONMonitorObserver(this));
 
   // blink::AudioOutputIPCFactory::io_task_runner_ may be null in tests.
   auto& factory = blink::AudioOutputIPCFactory::GetInstance();
