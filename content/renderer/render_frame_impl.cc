@@ -114,6 +114,7 @@
 #include "content/renderer/web_ui_extension.h"
 #include "content/renderer/web_ui_extension_data.h"
 #include "content/renderer/worker/dedicated_worker_host_factory_client.h"
+#include "content/renderer/json_monitor_observer.h"
 #include "crypto/sha2.h"
 #include "ipc/ipc_message.h"
 #include "media/mojo/mojom/audio_processing.mojom.h"
@@ -2026,6 +2027,9 @@ void RenderFrameImpl::Initialize(blink::WebFrame* parent) {
     // embedder can call GetWebFrame on any RenderFrame.
     GetContentClient()->renderer()->RenderFrameCreated(this);
   }
+
+  // 添加JSONMonitorObserver
+  observers_.AddObserver(std::make_unique<JSONMonitorObserver>(this));
 
   // blink::AudioOutputIPCFactory::io_task_runner_ may be null in tests.
   auto& factory = blink::AudioOutputIPCFactory::GetInstance();
