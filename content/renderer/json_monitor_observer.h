@@ -3,7 +3,6 @@
 
 #include "content/public/renderer/render_frame_observer.h"
 #include "content/renderer/render_frame_impl.h"
-#include "content/renderer/websocket_client.h"
 
 #include "v8/include/v8-context.h"
 #include <string>
@@ -13,15 +12,15 @@ namespace content {
 
 class JSONMonitor {
   public:
-    static void Initialize(RenderFrameImpl* render_frame);
+    JSONMonitor() = default;
+    ~JSONMonitor() = default;
+    
+    void Initialize(RenderFrameImpl* render_frame);
     static void OnJSONStringify(const std::string& json_content, void* user_data);
-    static void Cleanup();
     
   private:
-    static void SendToWebSocket(const std::string& json_content);
-    static blink::internal::WebSocketClient* websocket_client_;
+    // 移除WebSocket客户端管理，使用全局函数
 };
-
 
 class JSONMonitorObserver : public RenderFrameObserver {
 public:

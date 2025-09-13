@@ -230,8 +230,27 @@ bool WebSocketClient::SendFrame(const std::string& data) {
   // 发送帧
   ssize_t result = send(socket_fd_, reinterpret_cast<const char*>(frame.data()), static_cast<int>(frame.size()), 0);
   if (result == SOCKET_ERROR) {
-    LOG(ERROR) << "Failed to send WebSocket frame, error: " << SocketGetLastError();
-    connected_ = false;
+    int error_code = SocketGetLastError();
+    LOG(ERROR) << "Failed to send WebSocket frame, error code: " << error_code
+               << ", frame size: " << frame.size()
+               << ", socket fd: " << socket_fd_;
+
+    // 检查具体的错误类型
+#if _WIN32
+    if (error_code == WSAECONNRESET || error_code == WSAECONNABORTED ||
+        error_code == WSAENETDOWN || error_code == WSAENOTCONN) {
+#else
+    if (error_code == ECONNRESET || error_code == EPIPE ||
+        error_code == ENOTCONN || error_code == ECONNABORTED) {
+#endif
+      LOG(ERROR) << "Connection lost, marking as disconnected";
+      connected_ = false;
+      // 关闭socket以便下次重新连接
+      if (socket_fd_ != InvalidSocket) {
+        CloseSocket(socket_fd_);
+        socket_fd_ = InvalidSocket;
+      }
+    }
     return false;
   }
 
@@ -286,20 +305,50 @@ std::string WebSocketClient::Base64Encode(const std::string& data) {
 // 全局函数实现
 bool InitializeWebSocketClient(const std::string& host, int port, const std::string& path) {
   WebSocketClient*& client = GetGlobalWebSocketClientRef();
+
+  // 如果客户端已存在且已连接，直接返回成功
+  if (client != nullptr && client->IsConnected()) {
+    LOG(INFO) << "WebSocket client already connected, skipping initialization";
+    return true;
+  }
+
+  // 如果客户端不存在，创建新的
   if (client == nullptr) {
     client = new WebSocketClient();
   }
 
+  // 尝试连接（Connect内部会检查connected_状态）
   return client->Connect(host, port, path);
 }
 
 bool SendJsonToWebSocket(const std::string& json_message) {
   WebSocketClient* client = GetGlobalWebSocketClientRef();
-  if (client == nullptr || !client->IsConnected()) {
-    return false;
+
+  // 如果客户端不存在，尝试创建并连接
+  if (client == nullptr) {
+    LOG(WARNING) << "WebSocket client is null, attempting to initialize";
+    if (!InitializeWebSocketClient("127.0.0.1", 8080, "/")) {
+      LOG(ERROR) << "Failed to initialize WebSocket client";
+      return false;
+    }
+    client = GetGlobalWebSocketClientRef();
   }
 
-  return client->SendMessage(json_message);
+  // 如果未连接，尝试重新连接
+  if (!client->IsConnected()) {
+    LOG(WARNING) << "WebSocket disconnected, attempting to reconnect";
+    if (!client->Connect("127.0.0.1", 8080, "/")) {
+      LOG(ERROR) << "Failed to reconnect WebSocket";
+      return false;
+    }
+  }
+
+  // 发送消息
+  bool result = client->SendMessage(json_message);
+  if (!result) {
+    LOG(ERROR) << "Failed to send message, connection may be broken";
+  }
+  return result;
 }
 
 void CleanupWebSocketClient() {
