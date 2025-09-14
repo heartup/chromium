@@ -448,6 +448,7 @@ mojom("mojo_bindings") {
     "frame.mojom",
     "frame_messages.mojom",
     "input/input_injector.mojom",
+    "json_websocket.mojom",
     "media/media_log_records.mojom",
     "native_types.mojom",
     "navigation_client.mojom",

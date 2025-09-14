@@ -1,4 +1,4 @@
-#include "content/renderer/websocket_client.h"
+#include "content/browser/websocket_client.h"
 
 #include <cstring>
 #include <cstdio>

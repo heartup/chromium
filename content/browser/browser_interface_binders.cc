@@ -76,7 +76,9 @@
 #include "content/browser/worker_host/shared_worker_connector_impl.h"
 #include "content/browser/worker_host/shared_worker_host.h"
 #include "content/browser/xr/service/vr_service_impl.h"
+#include "content/browser/json_websocket_service_impl.h"
 #include "content/common/input/input_injector.mojom.h"
+#include "content/common/json_websocket.mojom.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/device_service.h"
@@ -747,6 +749,9 @@ void PopulateFrameBinders(RenderFrameHostImpl* host, mojo::BinderMap* map) {
 
   map->Add<blink::mojom::ContactsManager>(
       base::BindRepeating(ContactsManagerImpl::Create, base::Unretained(host)));
+
+  map->Add<mojom::JsonWebSocketService>(
+      base::BindRepeating(&JsonWebSocketServiceImpl::Create));
 
   map->Add<blink::mojom::ContentSecurityNotifier>(base::BindRepeating(
       [](RenderFrameHostImpl* host,

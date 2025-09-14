@@ -75,6 +75,8 @@ target(link_target_type, "renderer") {
     "in_process_renderer_thread.h",
     "json_monitor_observer.cc",
     "json_monitor_observer.h",
+    "json_websocket_client.cc",
+    "json_websocket_client.h",
     "local_resource_url_loader_factory.cc",
     "local_resource_url_loader_factory.h",
     "media/audio_decoder.cc",
@@ -163,8 +165,6 @@ target(link_target_type, "renderer") {
     "worker/shared_worker_factory_impl.h",
     "worker/worker_thread_registry.cc",
     "worker/worker_thread_registry.h",
-    "websocket_client.cc",
-    "websocket_client.h",
   ]
 
   if (is_android) {

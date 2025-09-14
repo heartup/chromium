@@ -1,5 +1,5 @@
-#ifndef V8_JSON_WEBSOCKET_CLIENT_H_
-#define V8_JSON_WEBSOCKET_CLIENT_H_
+#ifndef CONTENT_BROWSER_WEBSOCKET_CLIENT_H_
+#define CONTENT_BROWSER_WEBSOCKET_CLIENT_H_
 
 #include <string>
 #include <memory>
@@ -104,4 +104,4 @@ void CleanupWebSocketClient();
 } // namespace blink::internal
 
 
-#endif  // V8_JSON_WEBSOCKET_CLIENT_H_
+#endif  // CONTENT_BROWSER_WEBSOCKET_CLIENT_H_
