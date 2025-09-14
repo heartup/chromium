@@ -1,8 +1,11 @@
 #include "content/browser/json_websocket_service_impl.h"
 
+#include "base/command_line.h"
 #include "base/logging.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "content/browser/websocket_client.h"
+#include "content/public/common/content_switches.h"
 
 namespace content {
 
@@ -74,7 +77,22 @@ void JsonWebSocketServiceImpl::Connect(const std::string& host,
                                        uint32_t port,
                                        const std::string& path,
                                        ConnectCallback callback) {
-  LOG(INFO) << "[Browser] IPC: Connect request received for " << host << ":" << port << path;
+  // Override port with command line parameter if specified
+  uint32_t actual_port = port;
+  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kJsonWebSocketPort)) {
+    std::string port_str = command_line->GetSwitchValueASCII(switches::kJsonWebSocketPort);
+    unsigned int parsed_port;
+    if (base::StringToUint(port_str, &parsed_port) && parsed_port <= 65535) {
+      actual_port = static_cast<uint32_t>(parsed_port);
+      LOG(INFO) << "[Browser] Using WebSocket port from command line: " << actual_port;
+    } else {
+      LOG(WARNING) << "[Browser] Invalid port specified: " << port_str << ", using default: " << port;
+    }
+  }
+
+  LOG(INFO) << "[Browser] IPC: Connect request received for " << host << ":" << port << path
+            << " (using actual port: " << actual_port << ")";
 
   // Create WebSocket client if not exists
   if (!websocket_client_) {
@@ -88,8 +106,8 @@ void JsonWebSocketServiceImpl::Connect(const std::string& host,
     return;
   }
 
-  // Try to connect
-  bool success = websocket_client_->Connect(host, port, path);
+  // Try to connect with actual port
+  bool success = websocket_client_->Connect(host, actual_port, path);
   std::move(callback).Run(success);
 }
 
