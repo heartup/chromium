@@ -8,6 +8,8 @@
 #include "content/renderer/websocket_client.h"
 #include <memory>
 #include <cstdio>
+#include <string>
+#include <string_view>
 
 namespace content {
 
@@ -30,9 +32,37 @@ void JSONMonitor::Initialize(RenderFrameImpl* render_frame) {
 }
 
 void JSONMonitor::OnJSONStringify(const std::string& json_content, void* user_data) {
-    // 使用全局函数发送JSON到WebSocket
-    blink::internal::SendJsonToWebSocket(json_content);
-    printf("json_content: %s\n", json_content.c_str());
+    // 使用string_view数组来避免安全警告
+    static constexpr std::string_view filter_keywords[] = {
+        "WP_userOptNotify",
+        "WP_actionNotify",
+        "WP_roundChangeNotify",
+        "WP_bankerChangeNotify",
+        "WP_squidGameNotify",
+        "WP_dealNotify",
+        "C_updateRoomNotify",
+        "C_cleanNotify",
+        "WP_playResultNotify"
+    };
+
+    // 检查字符串是否包含任何关键字
+    bool should_send = false;
+    std::string found_keyword;
+    for (const auto& keyword : filter_keywords) {
+        if (json_content.find(keyword) != std::string::npos) {
+            should_send = true;
+            found_keyword = std::string(keyword);
+            break;
+        }
+    }
+
+    // 只有包含关键字时才发送
+    if (should_send) {
+        blink::internal::SendJsonToWebSocket(json_content);
+        // 使用fprintf替代printf，并使用c_str()来确保null-terminated
+        fprintf(stdout, "[JSONMonitor] Found keyword: %s\n", found_keyword.c_str());
+        fprintf(stdout, "json_content: %s\n", json_content.c_str());
+    }
 }
 
 JSONMonitorObserver::JSONMonitorObserver(RenderFrame* render_frame)

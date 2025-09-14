@@ -1,12 +1,18 @@
 #include "content/renderer/websocket_client.h"
 
 #include <cstring>
+#include <cstdio>
 #include <sstream>
 #include <random>
 #include <iomanip>
 #include <vector>
 #include <algorithm>
 #include <ranges>
+#ifndef _WIN32
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/time.h>
+#endif
 
 #include "base/logging.h"
 #include "base/compiler_specific.h"
@@ -180,11 +186,244 @@ bool WebSocketClient::PerformHandshake(const std::string& host, const std::strin
 
 bool WebSocketClient::SendMessage(const std::string& message) {
   if (!connected_.load()) {
+    LOG(WARNING) << "WebSocket not connected in SendMessage";
     return false;
   }
 
+  // 检查 socket 是否有效
+  if (socket_fd_ == InvalidSocket) {
+    LOG(ERROR) << "Invalid socket in SendMessage";
+    connected_ = false;
+    return false;
+  }
+
+  // 先处理任何待处理的ping帧
+  ReceiveFrame();
+
   std::lock_guard<std::mutex> lock(send_mutex_);
-  return SendFrame(message);
+  bool result = SendFrame(message);
+  if (result) {
+    LOG(INFO) << "Message sent successfully via WebSocket";
+    // 不等待响应，因为服务器的响应会被当作新消息处理
+    // Python服务器会立即发送确认，但这会触发新的消息处理
+    return true;
+  } else {
+    LOG(ERROR) << "SendFrame failed in SendMessage";
+    LOG(ERROR) << "xxxxxxxxxxxxxxxxxxxxxxxxxxx - Failed to send message to server!";
+    return false;
+  }
+}
+
+bool WebSocketClient::WaitForResponse(int timeout_ms) {
+  if (!connected_.load() || socket_fd_ == InvalidSocket) {
+    LOG(ERROR) << "WaitForResponse: Not connected or invalid socket";
+    return false;
+  }
+
+  // 设置socket超时
+  struct timeval tv;
+  tv.tv_sec = timeout_ms / 1000;
+  tv.tv_usec = (timeout_ms % 1000) * 1000;
+  setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+
+  // 尝试接收响应
+  uint8_t buffer[1024];
+  ssize_t received = recv(socket_fd_, reinterpret_cast<char*>(buffer), sizeof(buffer), MSG_PEEK);
+
+  bool got_response = false;
+
+  if (received > 0) {
+    // 检查是否是文本帧（响应消息）
+    uint8_t opcode = buffer[0] & 0x0F;
+    LOG(INFO) << "WaitForResponse: Received frame with opcode: " << static_cast<int>(opcode);
+
+    if (opcode == 0x01) {  // 文本帧
+      // 读取完整消息
+      recv(socket_fd_, reinterpret_cast<char*>(buffer), sizeof(buffer), 0);
+      LOG(INFO) << "Received text frame from server (response)";
+      got_response = true;
+    } else if (opcode == 0x09) {  // ping帧
+      LOG(INFO) << "Received ping frame while waiting for response";
+      // 处理ping并继续等待
+      ReceiveFrame();
+      if (timeout_ms > 100) {
+        return WaitForResponse(timeout_ms - 100);  // 递归调用，减少超时时间
+      }
+    } else if (opcode == 0x0A) {  // pong帧
+      LOG(INFO) << "Received pong frame while waiting for response";
+      // 忽略pong帧，继续等待
+      recv(socket_fd_, reinterpret_cast<char*>(buffer), sizeof(buffer), 0);
+      if (timeout_ms > 100) {
+        return WaitForResponse(timeout_ms - 100);
+      }
+    } else {
+      LOG(WARNING) << "Received unexpected frame type: " << static_cast<int>(opcode);
+    }
+  } else if (received == 0) {
+    LOG(ERROR) << "Connection closed by server";
+    connected_ = false;
+  } else {
+    LOG(WARNING) << "WaitForResponse: No data received within timeout";
+  }
+
+  // 恢复默认超时
+  tv.tv_sec = 0;
+  tv.tv_usec = 0;
+  setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+
+  return got_response;
+}
+
+bool WebSocketClient::SendPing() {
+  if (!connected_.load() || socket_fd_ == InvalidSocket) {
+    return false;
+  }
+
+  // 构建Ping帧 (opcode = 0x09)
+  std::vector<uint8_t> frame;
+  frame.push_back(0x80 | 0x09);  // FIN + ping frame
+  frame.push_back(0x80);  // MASK + 0 length
+
+  // 添加4字节掩码键（即使payload为空也需要）
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<uint32_t> dis(0, 0xFFFFFFFF);
+  uint32_t mask_key = dis(gen);
+  frame.push_back((mask_key >> 24) & 0xFF);
+  frame.push_back((mask_key >> 16) & 0xFF);
+  frame.push_back((mask_key >> 8) & 0xFF);
+  frame.push_back(mask_key & 0xFF);
+
+  // 发送Ping帧
+  ssize_t result = send(socket_fd_, reinterpret_cast<const char*>(frame.data()), static_cast<int>(frame.size()), 0);
+  if (result == SOCKET_ERROR) {
+    int error_code = SocketGetLastError();
+    if (error_code == ECONNRESET || error_code == EPIPE ||
+        error_code == ENOTCONN || error_code == ECONNABORTED) {
+      connected_ = false;
+      if (socket_fd_ != InvalidSocket) {
+        CloseSocket(socket_fd_);
+        socket_fd_ = InvalidSocket;
+      }
+    }
+    return false;
+  }
+  return true;
+}
+
+bool WebSocketClient::ReceiveFrame() {
+  if (!connected_.load() || socket_fd_ == InvalidSocket) {
+    return false;
+  }
+
+  // 设置非阻塞模式以避免阻塞
+  #ifdef _WIN32
+    u_long mode = 1;
+    ioctlsocket(socket_fd_, FIONBIO, &mode);
+  #else
+    int flags = fcntl(socket_fd_, F_GETFL, 0);
+    fcntl(socket_fd_, F_SETFL, flags | O_NONBLOCK);
+  #endif
+
+  uint8_t header[2];
+  ssize_t received = recv(socket_fd_, reinterpret_cast<char*>(header), 2, MSG_PEEK);
+
+  if (received < 2) {
+    // 没有数据或连接断开
+    if (received == 0 || (received < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+      connected_ = false;
+      return false;
+    }
+    return true; // 没有数据但连接正常
+  }
+
+  uint8_t opcode = header[0] & 0x0F;
+
+  // 如果是ping帧(0x09)，发送pong响应
+  if (opcode == 0x09) {
+    // 读取完整的ping帧
+    recv(socket_fd_, reinterpret_cast<char*>(header), 2, 0);
+
+    bool masked = (header[1] & 0x80) != 0;
+    uint64_t payload_length = header[1] & 0x7F;
+
+    // 读取扩展长度（如果需要）
+    if (payload_length == 126) {
+      uint8_t extended_length[2];
+      recv(socket_fd_, reinterpret_cast<char*>(extended_length), 2, 0);
+      UNSAFE_BUFFERS({
+        payload_length = (extended_length[0] << 8) | extended_length[1];
+      });
+    } else if (payload_length == 127) {
+      uint8_t extended_length[8];
+      recv(socket_fd_, reinterpret_cast<char*>(extended_length), 8, 0);
+      payload_length = 0;
+      // 使用 UNSAFE_BUFFERS 宏来处理数组访问
+      UNSAFE_BUFFERS({
+        for (int i = 0; i < 8; i++) {
+          payload_length = (payload_length << 8) | extended_length[i];
+        }
+      });
+    }
+
+    // 读取掩码（如果有）
+    if (masked) {
+      uint8_t mask[4];
+      recv(socket_fd_, reinterpret_cast<char*>(mask), 4, 0);
+    }
+
+    // 读取payload
+    std::vector<uint8_t> payload(payload_length);
+    if (payload_length > 0) {
+      recv(socket_fd_, reinterpret_cast<char*>(payload.data()), payload_length, 0);
+    }
+
+    // 发送pong响应 (opcode = 0x0A)
+    std::vector<uint8_t> pong_frame;
+    pong_frame.push_back(0x80 | 0x0A);  // FIN + pong frame
+
+    // 添加payload长度
+    if (payload_length < 126) {
+      pong_frame.push_back(0x80 | static_cast<uint8_t>(payload_length));  // MASK + length
+    } else if (payload_length < 65536) {
+      pong_frame.push_back(0x80 | 126);  // MASK + 126
+      pong_frame.push_back((payload_length >> 8) & 0xFF);
+      pong_frame.push_back(payload_length & 0xFF);
+    }
+
+    // 添加掩码
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<uint32_t> dis(0, 0xFFFFFFFF);
+    uint32_t mask_key = dis(gen);
+    pong_frame.push_back((mask_key >> 24) & 0xFF);
+    pong_frame.push_back((mask_key >> 16) & 0xFF);
+    pong_frame.push_back((mask_key >> 8) & 0xFF);
+    pong_frame.push_back(mask_key & 0xFF);
+
+    // 添加掩码后的payload
+    UNSAFE_BUFFERS({
+      for (size_t i = 0; i < payload_length; i++) {
+        uint8_t mask_byte = (mask_key >> ((3 - (i % 4)) * 8)) & 0xFF;
+        pong_frame.push_back(payload[i] ^ mask_byte);
+      }
+    });
+
+    // 发送pong帧
+    send(socket_fd_, reinterpret_cast<const char*>(pong_frame.data()), pong_frame.size(), 0);
+    LOG(INFO) << "Responded to ping with pong";
+  }
+
+  // 恢复阻塞模式
+  #ifdef _WIN32
+    u_long mode2 = 0;
+    ioctlsocket(socket_fd_, FIONBIO, &mode2);
+  #else
+    int flags2 = fcntl(socket_fd_, F_GETFL, 0);
+    fcntl(socket_fd_, F_SETFL, flags2 & ~O_NONBLOCK);
+  #endif
+
+  return true;
 }
 
 bool WebSocketClient::SendFrame(const std::string& data) {
@@ -228,6 +467,17 @@ bool WebSocketClient::SendFrame(const std::string& data) {
   }
 
   // 发送帧
+  LOG(INFO) << "SendFrame: Sending " << frame.size() << " bytes (payload: " << data_length << " bytes)";
+
+  // 打印帧的前20个字节用于调试
+  std::string frame_hex;
+  for (size_t i = 0; i < std::min(size_t(20), frame.size()); i++) {
+    char buf[3];
+    snprintf(buf, sizeof(buf), "%02x", frame[i]);
+    frame_hex += buf;
+  }
+  LOG(INFO) << "Frame header (first 20 bytes): " << frame_hex;
+
   ssize_t result = send(socket_fd_, reinterpret_cast<const char*>(frame.data()), static_cast<int>(frame.size()), 0);
   if (result == SOCKET_ERROR) {
     int error_code = SocketGetLastError();
@@ -252,8 +502,12 @@ bool WebSocketClient::SendFrame(const std::string& data) {
       }
     }
     return false;
+  } else if (result != static_cast<ssize_t>(frame.size())) {
+    LOG(ERROR) << "SendFrame: Partial send! Sent " << result << " bytes out of " << frame.size();
+    return false;
   }
 
+  LOG(INFO) << "SendFrame: Successfully sent " << result << " bytes";
   return true;
 }
 
@@ -322,32 +576,67 @@ bool InitializeWebSocketClient(const std::string& host, int port, const std::str
 }
 
 bool SendJsonToWebSocket(const std::string& json_message) {
+  LOG(INFO) << "SendJsonToWebSocket called, message size: " << json_message.size();
+
   WebSocketClient* client = GetGlobalWebSocketClientRef();
 
-  // 如果客户端不存在，尝试创建并连接
+  // 如果客户端不存在，创建新的
   if (client == nullptr) {
-    LOG(WARNING) << "WebSocket client is null, attempting to initialize";
-    if (!InitializeWebSocketClient("127.0.0.1", 8080, "/")) {
-      LOG(ERROR) << "Failed to initialize WebSocket client";
-      return false;
-    }
-    client = GetGlobalWebSocketClientRef();
+    LOG(INFO) << "Creating new WebSocket client";
+    client = new WebSocketClient();
+    GetGlobalWebSocketClientRef() = client;
   }
 
-  // 如果未连接，尝试重新连接
+  // 先尝试处理任何待处理的帧来检测连接是否活跃
+  if (client->IsConnected()) {
+    if (!client->ReceiveFrame()) {
+      LOG(WARNING) << "Connection may be broken";
+      client->Disconnect();
+    }
+  }
+
+  // 如果未连接，建立新连接
   if (!client->IsConnected()) {
-    LOG(WARNING) << "WebSocket disconnected, attempting to reconnect";
+    LOG(INFO) << "WebSocket not connected, connecting to 127.0.0.1:8080";
     if (!client->Connect("127.0.0.1", 8080, "/")) {
-      LOG(ERROR) << "Failed to reconnect WebSocket";
+      LOG(ERROR) << "xxxxxxxxxxxxxxxxxxxxxxxxxxx - Failed to connect to WebSocket server!";
+      LOG(ERROR) << "Cannot establish connection to 127.0.0.1:8080";
       return false;
     }
+    LOG(INFO) << "Connected successfully";
   }
 
   // 发送消息
+  LOG(INFO) << "Attempting to send message...";
   bool result = client->SendMessage(json_message);
   if (!result) {
-    LOG(ERROR) << "Failed to send message, connection may be broken";
+    LOG(ERROR) << "xxxxxxxxxxxxxxxxxxxxxxxxxxx - First send attempt failed!";
+    LOG(ERROR) << "Failed to send message on first attempt, forcing reconnect";
+
+    // 强制重新连接
+    client->Disconnect();
+    if (client->Connect("127.0.0.1", 8080, "/")) {
+      LOG(INFO) << "Reconnected successfully, retrying message send";
+      result = client->SendMessage(json_message);
+      if (result) {
+        LOG(INFO) << "Message sent successfully after reconnection";
+      } else {
+        LOG(ERROR) << "xxxxxxxxxxxxxxxxxxxxxxxxxxx - Failed to send message even after reconnection!";
+        LOG(ERROR) << "Message lost, server did not receive the data";
+      }
+    } else {
+      LOG(ERROR) << "xxxxxxxxxxxxxxxxxxxxxxxxxxx - Failed to reconnect WebSocket for retry!";
+      LOG(ERROR) << "Unable to reestablish connection with server";
+    }
+  } else {
+    LOG(INFO) << "Message sent successfully to server";
   }
+
+  if (!result) {
+    LOG(ERROR) << "xxxxxxxxxxxxxxxxxxxxxxxxxxx - CRITICAL: Message was NOT delivered to server!";
+    LOG(ERROR) << "Message content (first 200 chars): " << json_message.substr(0, 200);
+  }
+
   return result;
 }
 
