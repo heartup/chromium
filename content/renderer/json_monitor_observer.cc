@@ -6,6 +6,7 @@
 #include "v8/include/v8-context.h"
 #include "v8/include/v8-isolate.h"
 #include "content/renderer/websocket_client.h"
+#include "base/logging.h"
 #include <memory>
 #include <cstdio>
 #include <string>
@@ -21,13 +22,14 @@ void JSONMonitor::Initialize(RenderFrameImpl* render_frame) {
     // 调用V8的SetJSONStringifyCallback函数
     v8::JSON::SetJSONStringifyCallback(&JSONMonitor::OnJSONStringify, render_frame);
 
-    // 使用全局函数初始化WebSocket连接
-    printf("[JSONMonitor] Attempting to initialize WebSocket connection to 127.0.0.1:8080\n");
+    // 尝试初始化 WebSocket (仅在非沙盒模式下工作)
+    LOG(INFO) << "[JSONMonitor] Attempting to initialize WebSocket connection to 127.0.0.1:8080";
+
     bool connected = blink::internal::InitializeWebSocketClient("127.0.0.1", 8080, "/");
     if (connected) {
-        printf("[JSONMonitor] WebSocket connection established or already connected\n");
+        LOG(INFO) << "[JSONMonitor] WebSocket connection established (requires --no-sandbox)";
     } else {
-        printf("[JSONMonitor] Failed to establish WebSocket connection\n");
+        LOG(WARNING) << "[JSONMonitor] WebSocket connection failed (use --no-sandbox or monitor logs)";
     }
 }
 
@@ -58,10 +60,13 @@ void JSONMonitor::OnJSONStringify(const std::string& json_content, void* user_da
 
     // 只有包含关键字时才发送
     if (should_send) {
-        blink::internal::SendJsonToWebSocket(json_content);
-        // 使用fprintf替代printf，并使用c_str()来确保null-terminated
-        fprintf(stdout, "[JSONMonitor] Found keyword: %s\n", found_keyword.c_str());
-        fprintf(stdout, "json_content: %s\n", json_content.c_str());
+        // 输出特殊格式的日志，便于外部脚本识别和转发
+        LOG(INFO) << "[JSON_MONITOR_DATA_START]" << json_content << "[JSON_MONITOR_DATA_END]";
+
+        // 尝试通过 WebSocket 发送（仅在非沙盒模式下工作）
+        if (!blink::internal::SendJsonToWebSocket(json_content)) {
+            LOG(WARNING) << "[JSONMonitor] WebSocket send failed, data logged for external processing";
+        }
     }
 }
 
