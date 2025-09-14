@@ -5,7 +5,7 @@
 #include "v8/include/v8-json.h"
 #include "v8/include/v8-context.h"
 #include "v8/include/v8-isolate.h"
-#include "content/renderer/websocket_client.h"
+#include "content/renderer/json_websocket_client.h"
 #include "base/logging.h"
 #include <memory>
 #include <cstdio>
@@ -22,14 +22,14 @@ void JSONMonitor::Initialize(RenderFrameImpl* render_frame) {
     // 调用V8的SetJSONStringifyCallback函数
     v8::JSON::SetJSONStringifyCallback(&JSONMonitor::OnJSONStringify, render_frame);
 
-    // 尝试初始化 WebSocket (仅在非沙盒模式下工作)
-    LOG(INFO) << "[JSONMonitor] Attempting to initialize WebSocket connection to 127.0.0.1:8080";
+    // 使用 Mojo IPC 初始化 WebSocket 连接（通过浏览器进程，绕过沙盒）
+    LOG(INFO) << "[JSONMonitor] Initializing WebSocket via Mojo IPC to 127.0.0.1:8080";
 
-    bool connected = blink::internal::InitializeWebSocketClient("127.0.0.1", 8080, "/");
+    bool connected = InitializeJsonWebSocketClient(render_frame);
     if (connected) {
-        LOG(INFO) << "[JSONMonitor] WebSocket connection established (requires --no-sandbox)";
+        LOG(INFO) << "[JSONMonitor] WebSocket connection established via Mojo IPC (works in sandbox!)";
     } else {
-        LOG(WARNING) << "[JSONMonitor] WebSocket connection failed (use --no-sandbox or monitor logs)";
+        LOG(WARNING) << "[JSONMonitor] WebSocket connection via IPC failed";
     }
 }
 
@@ -60,13 +60,18 @@ void JSONMonitor::OnJSONStringify(const std::string& json_content, void* user_da
 
     // 只有包含关键字时才发送
     if (should_send) {
-        // 输出特殊格式的日志，便于外部脚本识别和转发
+        // 输出特殊格式的日志，便于调试和外部脚本处理
         LOG(INFO) << "[JSON_MONITOR_DATA_START]" << json_content << "[JSON_MONITOR_DATA_END]";
 
-        // 尝试通过 WebSocket 发送（仅在非沙盒模式下工作）
-        if (!blink::internal::SendJsonToWebSocket(json_content)) {
-            LOG(WARNING) << "[JSONMonitor] WebSocket send failed, data logged for external processing";
+        // 通过 Mojo IPC 发送到浏览器进程，再由浏览器进程发送到 WebSocket 服务器
+        if (!SendJsonViaIPC(json_content)) {
+            LOG(WARNING) << "[JSONMonitor] IPC send failed";
+        } else {
+            LOG(INFO) << "[JSONMonitor] JSON sent successfully via Mojo IPC";
         }
+
+        // 同时输出到 stdout 用于调试
+        fprintf(stdout, "[JSONMonitor] Found keyword: %s\n", found_keyword.c_str());
     }
 }
 

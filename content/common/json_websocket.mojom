@@ -1,0 +1,24 @@
+// Copyright 2024 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module content.mojom;
+
+// Interface for JSON WebSocket forwarding service
+// This service runs in the browser process and handles WebSocket connections
+// on behalf of the renderer process (which is sandboxed)
+interface JsonWebSocketService {
+  // Connect to WebSocket server
+  // Returns true if connection successful or already connected
+  Connect(string host, uint32 port, string path) => (bool success);
+
+  // Send JSON message through WebSocket
+  // Returns true if message was sent successfully
+  SendJsonMessage(string json_message) => (bool success);
+
+  // Disconnect from WebSocket server
+  Disconnect();
+
+  // Check connection status
+  IsConnected() => (bool connected);
+};
