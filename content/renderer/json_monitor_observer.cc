@@ -23,7 +23,7 @@ void JSONMonitor::Initialize(RenderFrameImpl* render_frame) {
     v8::JSON::SetJSONStringifyCallback(&JSONMonitor::OnJSONStringify, render_frame);
 
     // 使用 Mojo IPC 初始化 WebSocket 连接（通过浏览器进程，绕过沙盒）
-    LOG(INFO) << "[JSONMonitor] Initializing WebSocket via Mojo IPC to 127.0.0.1:8080";
+    LOG(INFO) << "[JSONMonitor] Initializing WebSocket via Mojo IPC";
 
     bool connected = InitializeJsonWebSocketClient(render_frame);
     if (connected) {
