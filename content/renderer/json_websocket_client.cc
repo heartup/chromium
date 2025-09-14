@@ -2,7 +2,6 @@
 
 #include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/run_loop.h"
 #include "content/public/renderer/render_thread.h"
 #include "content/renderer/render_frame_impl.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -59,27 +58,26 @@ bool JsonWebSocketClient::Connect(const std::string& host,
 
   LOG(INFO) << "[Renderer] Requesting connection to " << host << ":" << port << path;
 
-  bool success = false;
-  // Mojo 调用是异步的，使用 base::RunLoop 等待响应
-  base::RunLoop run_loop;
+  // 为了避免阻塞主线程，我们暂时假设连接会成功
+  // 实际的连接状态会在异步回调中更新
   service_->Connect(
       host, port, path,
       base::BindOnce(
-          [](bool* out_success, base::RunLoop* loop, bool result) {
-            *out_success = result;
-            loop->Quit();
+          [](JsonWebSocketClient* client, bool result) {
+            if (result) {
+              client->connected_ = true;
+              LOG(INFO) << "[Renderer] Connection successful (async)";
+            } else {
+              client->connected_ = false;
+              LOG(ERROR) << "[Renderer] Connection failed (async)";
+            }
           },
-          &success, &run_loop));
-  run_loop.Run();
+          base::Unretained(this)));
 
-  if (success) {
-    connected_ = true;
-    LOG(INFO) << "[Renderer] Connection successful";
-  } else {
-    LOG(ERROR) << "[Renderer] Connection failed";
-  }
-
-  return success;
+  // 暂时返回 true，实际状态会异步更新
+  connected_ = true;
+  LOG(INFO) << "[Renderer] Connection request sent (assuming success)";
+  return true;
 }
 
 bool JsonWebSocketClient::SendJsonMessage(const std::string& json_message) {
@@ -99,25 +97,21 @@ bool JsonWebSocketClient::SendJsonMessage(const std::string& json_message) {
 
   LOG(INFO) << "[Renderer] Sending JSON message via IPC, size: " << json_message.size();
 
-  bool success = false;
-  // Mojo 调用是异步的，使用 base::RunLoop 等待响应
-  base::RunLoop run_loop;
+  // 异步发送，不阻塞主线程
   service_->SendJsonMessage(
       json_message,
       base::BindOnce(
-          [](bool* out_success, base::RunLoop* loop, bool result) {
-            *out_success = result;
-            loop->Quit();
+          [](const std::string& msg, bool result) {
+            if (result) {
+              LOG(INFO) << "[Renderer] Message sent successfully (async)";
+            } else {
+              LOG(ERROR) << "[Renderer] Failed to send message (async)";
+            }
           },
-          &success, &run_loop));
-  run_loop.Run();
+          json_message));
 
-  if (!success) {
-    LOG(ERROR) << "[Renderer] Failed to send message via IPC";
-    connected_ = false;  // Mark as disconnected
-  }
-
-  return success;
+  // 假设发送成功（实际结果会在回调中报告）
+  return true;
 }
 
 void JsonWebSocketClient::Disconnect() {
@@ -133,20 +127,9 @@ bool JsonWebSocketClient::IsConnected() {
     return false;
   }
 
-  bool connected = false;
-  // Mojo 调用是异步的，使用 base::RunLoop 等待响应
-  base::RunLoop run_loop;
-  service_->IsConnected(
-      base::BindOnce(
-          [](bool* out_connected, base::RunLoop* loop, bool result) {
-            *out_connected = result;
-            loop->Quit();
-          },
-          &connected, &run_loop));
-  run_loop.Run();
-
-  connected_ = connected;
-  return connected;
+  // 返回缓存的连接状态，避免阻塞
+  // 可以定期异步更新这个状态
+  return connected_;
 }
 
 // Helper functions
