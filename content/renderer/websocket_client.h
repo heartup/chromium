@@ -49,14 +49,23 @@ class WebSocketClient {
   // 连接到WebSocket服务器
   bool Connect(const std::string& host, int port, const std::string& path = "/");
 
-  // 发送消息
+  // 发送消息（带确认机制）
   bool SendMessage(const std::string& message);
+
+  // 等待服务器响应
+  bool WaitForResponse(int timeout_ms = 5000);
 
   // 断开连接
   void Disconnect();
 
   // 检查连接状态
   bool IsConnected() const;
+
+  // 发送Ping帧
+  bool SendPing();
+
+  // 接收并处理帧（用于处理ping/pong）
+  bool ReceiveFrame();
 
  private:
   // WebSocket握手
