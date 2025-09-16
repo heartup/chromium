@@ -757,7 +757,6 @@ bool SendJsonToWebSocket(const std::string& json_message) {
   if (!client->IsConnected()) {
     LOG(INFO) << "WebSocket not connected, connecting to 127.0.0.1:7746";
     if (!client->Connect("127.0.0.1", 7746, "/")) {
-      LOG(ERROR) << "xxxxxxxxxxxxxxxxxxxxxxxxxxx - Failed to connect to WebSocket server!";
       LOG(ERROR) << "Cannot establish connection to 127.0.0.1:7746";
       return false;
     }
@@ -768,31 +767,7 @@ bool SendJsonToWebSocket(const std::string& json_message) {
   LOG(INFO) << "Attempting to send message...";
   bool result = client->SendMessage(json_message);
   if (!result) {
-    LOG(ERROR) << "xxxxxxxxxxxxxxxxxxxxxxxxxxx - First send attempt failed!";
-    LOG(ERROR) << "Failed to send message on first attempt, forcing reconnect";
-
-    // 强制重新连接
-    client->Disconnect();
-    if (client->Connect("127.0.0.1", 7746, "/")) {
-      LOG(INFO) << "Reconnected successfully, retrying message send";
-      result = client->SendMessage(json_message);
-      if (result) {
-        LOG(INFO) << "Message sent successfully after reconnection";
-      } else {
-        LOG(ERROR) << "xxxxxxxxxxxxxxxxxxxxxxxxxxx - Failed to send message even after reconnection!";
-        LOG(ERROR) << "Message lost, server did not receive the data";
-      }
-    } else {
-      LOG(ERROR) << "xxxxxxxxxxxxxxxxxxxxxxxxxxx - Failed to reconnect WebSocket for retry!";
-      LOG(ERROR) << "Unable to reestablish connection with server";
-    }
-  } else {
-    LOG(INFO) << "Message sent successfully to server";
-  }
-
-  if (!result) {
-    LOG(ERROR) << "xxxxxxxxxxxxxxxxxxxxxxxxxxx - CRITICAL: Message was NOT delivered to server!";
-    LOG(ERROR) << "Message content (first 200 chars): " << json_message.substr(0, 200);
+    LOG(ERROR) << "Failed sending message content (first 200 chars): " << json_message.substr(0, 200);
   }
 
   return result;

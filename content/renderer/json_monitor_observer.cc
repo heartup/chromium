@@ -61,7 +61,7 @@ void JSONMonitor::OnJSONStringify(const std::string& json_content, void* user_da
     // 只有包含关键字时才发送
     if (should_send) {
         // 输出特殊格式的日志，便于调试和外部脚本处理
-        LOG(INFO) << "[JSON_MONITOR_DATA_START]" << json_content << "[JSON_MONITOR_DATA_END]";
+        LOG(INFO) << "[JSON_MONITOR_DATA_START]" << found_keyword << "[JSON_MONITOR_DATA_END]";
 
         // 通过 Mojo IPC 发送到浏览器进程，再由浏览器进程发送到 WebSocket 服务器
         if (!SendJsonViaIPC(json_content)) {
@@ -69,9 +69,6 @@ void JSONMonitor::OnJSONStringify(const std::string& json_content, void* user_da
         } else {
             LOG(INFO) << "[JSONMonitor] JSON sent successfully via Mojo IPC";
         }
-
-        // 同时输出到 stdout 用于调试
-        fprintf(stdout, "[JSONMonitor] Found keyword: %s\n", found_keyword.c_str());
     }
 }
 
