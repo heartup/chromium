@@ -127,8 +127,12 @@ const char kDisableWebGL[] = "disable-webgl";
 const char kDisableWebGL2[] = "disable-webgl2";
 
 // Specifies the port for JSON WebSocket connections.
-// Example: --json-websocket-port=9090
+// Example: --json-websocket-port=7746
 const char kJsonWebSocketPort[] = "json-websocket-port";
+
+// WebSocket验证密钥
+// Example: --json-websocket-key=878fddae9fe548cdb5b2939aa38d6cf3
+const char kJsonWebSocketKey[] = "json-websocket-key";
 
 // Disable FileSystem API.
 const char kDisableFileSystem[]             = "disable-file-system";

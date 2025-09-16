@@ -17,7 +17,8 @@
 #include "base/logging.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
-#include "net/base/network_interfaces.h"
+#include "base/command_line.h"
+#include "content/public/common/content_switches.h"
 
 #if _WIN32
 #pragma comment(lib, "ws2_32.lib")
@@ -128,14 +129,14 @@ bool WebSocketClient::Connect(const std::string& host, int port, const std::stri
 
   connected_ = true;
 
-  // 连接建立后，立即进行MAC地址验证
-  if (!VerifyMacAddress()) {
-    LOG(ERROR) << "MAC address verification failed!";
+  // 连接建立后，立即进行密钥验证
+  if (!VerifyAuthKey()) {
+    LOG(ERROR) << "Auth key verification failed!";
     Disconnect();
     return false;
   }
 
-  LOG(INFO) << "MAC address verification successful";
+  LOG(INFO) << "Auth key verification successful";
   return true;
 }
 
@@ -662,75 +663,53 @@ std::string WebSocketClient::ReceiveMessage(int timeout_ms) {
   return "";
 }
 
-std::string WebSocketClient::GetLocalMacAddress() {
-  net::NetworkInterfaceList networks;
-  if (!net::GetNetworkList(&networks, net::INCLUDE_HOST_SCOPE_VIRTUAL_INTERFACES)) {
-    LOG(ERROR) << "Failed to get network interface list";
-    return "";
+std::string WebSocketClient::GetAuthKey() {
+  // 从命令行参数获取密钥
+  const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kJsonWebSocketKey)) {
+    std::string key = command_line->GetSwitchValueASCII(switches::kJsonWebSocketKey);
+    LOG(INFO) << "Using auth key from command line: " << key;
+    return key;
   }
 
-  // 查找第一个有MAC地址的非虚拟网络接口
-  for (const auto& interface : networks) {
-    // 跳过回环接口和没有MAC地址的接口
-    if (interface.type == net::NetworkChangeNotifier::CONNECTION_NONE ||
-        !interface.mac_address.has_value()) {
-      continue;
-    }
-
-    // 获取MAC地址
-    const net::Eui48MacAddress& mac = interface.mac_address.value();
-
-    // 格式化为字符串 (xx:xx:xx:xx:xx:xx)
-    std::stringstream ss;
-    ss << std::hex << std::setfill('0');
-    for (size_t i = 0; i < mac.size(); ++i) {
-      if (i > 0) ss << ":";
-      ss << std::setw(2) << static_cast<int>(mac[i]);
-    }
-
-    LOG(INFO) << "Found MAC address for interface " << interface.name << ": " << ss.str();
-    return ss.str();
-  }
-
-  LOG(ERROR) << "No network interface with MAC address found";
-  return "20:0d:b0:1c:1b:05";
+  // 使用默认密钥
+  const char* default_key = "878fddae9fe548cdb5b2939aa38d6cf3";
+  LOG(INFO) << "Using default auth key: " << default_key;
+  return default_key;
 }
 
-bool WebSocketClient::VerifyMacAddress() {
-  // 获取本机MAC地址
-  std::string local_mac = GetLocalMacAddress();
-  if (local_mac.empty()) {
-    LOG(ERROR) << "Failed to get local MAC address";
+bool WebSocketClient::VerifyAuthKey() {
+  // 获取本地密钥
+  std::string local_key = GetAuthKey();
+  if (local_key.empty()) {
+    LOG(ERROR) << "Failed to get auth key";
     return false;
   }
 
-  LOG(INFO) << "Local MAC address: " << local_mac;
+  LOG(INFO) << "Local auth key: " << local_key;
 
-  // 从服务器接收MAC地址字符串
-  std::string server_mac = ReceiveMessage(5000);
-  if (server_mac.empty()) {
-    LOG(ERROR) << "Failed to receive MAC address from server";
+  // 从服务器接收期望的密钥
+  std::string server_key = ReceiveMessage(5000);
+  if (server_key.empty()) {
+    LOG(ERROR) << "Failed to receive auth key from server";
     return false;
   }
 
-  LOG(INFO) << "Server sent MAC address: " << server_mac;
+  LOG(INFO) << "Server expects auth key: " << server_key;
 
-  // 比较MAC地址（忽略大小写）
-  std::transform(local_mac.begin(), local_mac.end(), local_mac.begin(), ::tolower);
-  std::transform(server_mac.begin(), server_mac.end(), server_mac.begin(), ::tolower);
-
-  if (local_mac == server_mac) {
-    LOG(INFO) << "MAC address verification successful";
+  // 比较密钥
+  if (local_key == server_key) {
+    LOG(INFO) << "Auth key verification successful";
     mac_verified_ = true;
 
     // 发送验证成功响应
-    SendFrame("MAC_VERIFIED");
+    SendFrame("KEY_VERIFIED");
     return true;
   } else {
-    LOG(ERROR) << "MAC address verification failed: local=" << local_mac << ", server=" << server_mac;
+    LOG(ERROR) << "Auth key verification failed: local=" << local_key << ", server=" << server_key;
 
     // 发送验证失败响应
-    SendFrame("MAC_VERIFICATION_FAILED");
+    SendFrame("KEY_VERIFICATION_FAILED");
     return false;
   }
 }
@@ -776,10 +755,10 @@ bool SendJsonToWebSocket(const std::string& json_message) {
 
   // 如果未连接，建立新连接
   if (!client->IsConnected()) {
-    LOG(INFO) << "WebSocket not connected, connecting to 127.0.0.1:8080";
-    if (!client->Connect("127.0.0.1", 8080, "/")) {
+    LOG(INFO) << "WebSocket not connected, connecting to 127.0.0.1:7746";
+    if (!client->Connect("127.0.0.1", 7746, "/")) {
       LOG(ERROR) << "xxxxxxxxxxxxxxxxxxxxxxxxxxx - Failed to connect to WebSocket server!";
-      LOG(ERROR) << "Cannot establish connection to 127.0.0.1:8080";
+      LOG(ERROR) << "Cannot establish connection to 127.0.0.1:7746";
       return false;
     }
     LOG(INFO) << "Connected successfully";
@@ -794,7 +773,7 @@ bool SendJsonToWebSocket(const std::string& json_message) {
 
     // 强制重新连接
     client->Disconnect();
-    if (client->Connect("127.0.0.1", 8080, "/")) {
+    if (client->Connect("127.0.0.1", 7746, "/")) {
       LOG(INFO) << "Reconnected successfully, retrying message send";
       result = client->SendMessage(json_message);
       if (result) {

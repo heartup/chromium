@@ -14,9 +14,9 @@ from datetime import datetime
 # 全局客户端集合
 clients = set()
 
-# MAC地址验证配置
-ENABLE_MAC_VERIFICATION = True  # 是否启用MAC地址验证
-TEST_MAC_ADDRESS = "20:0d:b0:1c:1b:05"  # 测试用MAC地址，请修改为你的实际MAC地址
+# 密钥验证配置
+ENABLE_KEY_VERIFICATION = True  # 是否启用密钥验证
+TEST_AUTH_KEY = "878fddae9fe548cdb5b2939aa38d6cf3"  # 测试用验证密钥，应与命令行参数--json-websocket-key一致
 
 # 已验证的客户端集合
 verified_clients = set()
@@ -34,48 +34,48 @@ async def unregister_client(websocket):
     print(f"客户端已断开: {websocket.remote_address}")
     print(f"当前连接数: {len(clients)}")
 
-async def verify_mac_address(websocket):
-    """执行MAC地址验证"""
-    if not ENABLE_MAC_VERIFICATION:
+async def verify_auth_key(websocket):
+    """执行密钥验证"""
+    if not ENABLE_KEY_VERIFICATION:
         verified_clients.add(websocket)
         return True
 
     try:
-        print(f"\n=== MAC地址验证 ===")
-        print(f"发送MAC地址给客户端验证: {TEST_MAC_ADDRESS}")
+        print(f"\n=== 密钥验证 ===")
+        print(f"发送验证密钥给客户端: {TEST_AUTH_KEY}")
 
-        # 发送MAC地址给客户端
-        await websocket.send(TEST_MAC_ADDRESS)
+        # 发送密钥给客户端
+        await websocket.send(TEST_AUTH_KEY)
 
         # 等待客户端响应（超时10秒）
         try:
             response = await asyncio.wait_for(websocket.recv(), timeout=10.0)
             print(f"收到验证响应: {response}")
 
-            if response == "MAC_VERIFIED":
-                print("MAC地址验证成功!")
+            if response == "KEY_VERIFIED":
+                print("密钥验证成功!")
                 verified_clients.add(websocket)
                 return True
-            elif response == "MAC_VERIFICATION_FAILED":
-                print("MAC地址验证失败!")
+            elif response == "KEY_VERIFICATION_FAILED":
+                print("密钥验证失败!")
                 return False
             else:
                 print(f"意外的验证响应: {response}")
                 return False
 
         except asyncio.TimeoutError:
-            print("MAC地址验证超时")
+            print("密钥验证超时")
             return False
 
     except Exception as e:
-        print(f"MAC地址验证过程出错: {e}")
+        print(f"密钥验证过程出错: {e}")
         return False
 
 async def handle_message(websocket, message):
     """处理接收到的消息"""
-    # 检查是否已通过MAC验证
-    if ENABLE_MAC_VERIFICATION and websocket not in verified_clients:
-        print(f"警告: 客户端未通过MAC验证，忽略消息")
+    # 检查是否已通过密钥验证
+    if ENABLE_KEY_VERIFICATION and websocket not in verified_clients:
+        print(f"警告: 客户端未通过密钥验证，忽略消息")
         return
 
     print(f"\n=== 收到消息 ===")
@@ -107,14 +107,14 @@ async def client_handler(websocket):
     websocket.ping_timeout = None   # 禁用ping超时
     websocket.close_timeout = 60    # 关闭连接的超时时间
 
-    # 执行MAC地址验证
-    if ENABLE_MAC_VERIFICATION:
-        if not await verify_mac_address(websocket):
-            print("MAC地址验证失败，关闭连接")
+    # 执行密钥验证
+    if ENABLE_KEY_VERIFICATION:
+        if not await verify_auth_key(websocket):
+            print("密钥验证失败，关闭连接")
             await websocket.close()
             await unregister_client(websocket)
             return
-        print("MAC地址验证通过，可以接收消息")
+        print("密钥验证通过，可以接收消息")
 
     try:
         async for message in websocket:
@@ -137,15 +137,15 @@ async def client_handler(websocket):
 async def start_server():
     """启动WebSocket服务器"""
     host = 'localhost'
-    port = 7779
+    port = 7746
 
     print(f"启动WebSocket服务器: ws://{host}:{port}")
-    if ENABLE_MAC_VERIFICATION:
-        print(f"MAC地址验证: 已启用")
-        print(f"验证MAC地址: {TEST_MAC_ADDRESS}")
-        print("注意: 请确保TEST_MAC_ADDRESS与客户端MAC地址一致")
+    if ENABLE_KEY_VERIFICATION:
+        print(f"密钥验证: 已启用")
+        print(f"验证密钥: {TEST_AUTH_KEY}")
+        print("注意: 客户端需使用 --json-websocket-key={} 参数启动".format(TEST_AUTH_KEY))
     else:
-        print(f"MAC地址验证: 已禁用")
+        print(f"密钥验证: 已禁用")
     print("等待来自V8 JsonStringify的连接...")
     print("按Ctrl+C停止服务器")
     print(f"启动时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

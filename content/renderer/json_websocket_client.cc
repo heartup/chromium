@@ -90,7 +90,7 @@ bool JsonWebSocketClient::SendJsonMessage(const std::string& json_message) {
     LOG(WARNING) << "[Renderer] Not connected, attempting to connect first";
 
     // Port configuration is handled in browser process
-    uint32_t port = 8080;  // Default port (will be overridden in browser if configured)
+    uint32_t port = 7746;  // Default port (will be overridden in browser if configured)
 
     // Try to connect
     if (!Connect("127.0.0.1", port, "/")) {
@@ -142,7 +142,7 @@ bool InitializeJsonWebSocketClient(RenderFrameImpl* render_frame) {
 
   // Port configuration is handled in browser process via --json-websocket-port flag
   // Renderer always sends default port, browser will override if needed
-  uint32_t port = 8080;  // Default port (will be overridden in browser if configured)
+  uint32_t port = 7746;  // Default port (will be overridden in browser if configured)
 
   LOG(INFO) << "[Renderer] Requesting connection (port will be configured in browser process)";
   return JsonWebSocketClient::GetInstance()->Connect("127.0.0.1", port, "/");

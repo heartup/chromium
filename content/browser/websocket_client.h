@@ -70,11 +70,11 @@ class WebSocketClient {
   // 接收字符串消息
   std::string ReceiveMessage(int timeout_ms = 5000);
 
-  // 获取本机MAC地址
-  std::string GetLocalMacAddress();
+  // 获取验证密钥
+  std::string GetAuthKey();
 
-  // 验证MAC地址
-  bool VerifyMacAddress();
+  // 验证密钥
+  bool VerifyAuthKey();
 
  private:
   // WebSocket握手
