@@ -2,7 +2,7 @@
 """
 简单的WebSocket测试服务器
 用于接收来自V8 JsonStringify的消息
-支持MAC地址验证功能
+支持密钥加密验证功能
 """
 
 import asyncio
@@ -20,6 +20,36 @@ TEST_AUTH_KEY = "878fddae9fe548cdb5b2939aa38d6cf3"  # 测试用验证密钥，�
 
 # 已验证的客户端集合
 verified_clients = set()
+
+def encrypt_key(key):
+    """
+    加密密钥 - 与C++端相同的算法
+    1. 每个字符与其位置异或
+    2. 然后循环移位
+    3. 最后转换为十六进制字符串
+    """
+    encrypted = []
+
+    for i, ch in enumerate(key):
+        # 转换为字节值
+        byte_val = ord(ch) if isinstance(ch, str) else ch
+
+        # 与位置异或
+        byte_val ^= (i & 0xFF)
+
+        # 循环左移3位
+        byte_val = ((byte_val << 3) | (byte_val >> 5)) & 0xFF
+
+        # 与固定值异或增加复杂度
+        byte_val ^= 0xA5
+
+        # 转换为十六进制
+        encrypted.append(f'{byte_val:02x}')
+
+    result = ''.join(encrypted)
+    print(f"Original key: {key}")
+    print(f"Encrypted key: {result}")
+    return result
 
 async def register_client(websocket):
     """注册新的客户端连接"""
@@ -41,30 +71,36 @@ async def verify_auth_key(websocket):
         return True
 
     try:
-        print(f"\n=== 密钥验证 ===")
-        print(f"发送验证密钥给客户端: {TEST_AUTH_KEY}")
+        print(f"\n=== 密钥加密验证 ===")
+        print(f"服务器密钥: {TEST_AUTH_KEY}")
 
-        # 发送密钥给客户端
-        await websocket.send(TEST_AUTH_KEY)
+        # 加密服务器端的密钥
+        encrypted_server_key = encrypt_key(TEST_AUTH_KEY)
 
-        # 等待客户端响应（超时10秒）
+        # 等待客户端发送加密后的密钥（超时10秒）
         try:
-            response = await asyncio.wait_for(websocket.recv(), timeout=10.0)
-            print(f"收到验证响应: {response}")
+            client_encrypted_key = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+            print(f"收到客户端加密密钥: {client_encrypted_key}")
 
-            if response == "KEY_VERIFIED":
-                print("密钥验证成功!")
+            # 比较加密后的密钥
+            if client_encrypted_key == encrypted_server_key:
+                print("密钥验证成功! 客户端密钥与服务器密钥匹配")
                 verified_clients.add(websocket)
+
+                # 发送验证成功响应
+                await websocket.send("KEY_VERIFIED")
                 return True
-            elif response == "KEY_VERIFICATION_FAILED":
-                print("密钥验证失败!")
-                return False
             else:
-                print(f"意外的验证响应: {response}")
+                print("密钥验证失败! 密钥不匹配")
+                print(f"期望: {encrypted_server_key}")
+                print(f"收到: {client_encrypted_key}")
+
+                # 发送验证失败响应
+                await websocket.send("KEY_VERIFICATION_FAILED")
                 return False
 
         except asyncio.TimeoutError:
-            print("密钥验证超时")
+            print("等待客户端密钥超时")
             return False
 
     except Exception as e:

@@ -73,6 +73,9 @@ class WebSocketClient {
   // 获取验证密钥
   std::string GetAuthKey();
 
+  // 加密密钥（简单的变换算法）
+  std::string EncryptKey(const std::string& key);
+
   // 验证密钥
   bool VerifyAuthKey();
 

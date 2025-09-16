@@ -677,6 +677,39 @@ std::string WebSocketClient::GetAuthKey() {
   return default_key;
 }
 
+std::string WebSocketClient::EncryptKey(const std::string& key) {
+  // 简单的加密算法：
+  // 1. 每个字符与其位置异或
+  // 2. 然后循环移位
+  // 3. 最后转换为十六进制字符串
+
+  std::string encrypted;
+  encrypted.reserve(key.length() * 2);
+
+  for (size_t i = 0; i < key.length(); ++i) {
+    unsigned char ch = static_cast<unsigned char>(key[i]);
+
+    // 与位置异或
+    ch ^= (i & 0xFF);
+
+    // 循环左移3位
+    ch = ((ch << 3) | (ch >> 5)) & 0xFF;
+
+    // 与固定值异或增加复杂度
+    ch ^= 0xA5;
+
+    // 转换为十六进制
+    char hex[3];
+    snprintf(hex, sizeof(hex), "%02x", ch);
+    encrypted.append(hex);
+  }
+
+  LOG(INFO) << "[WebSocket] Original key: " << key;
+  LOG(INFO) << "[WebSocket] Encrypted key: " << encrypted;
+
+  return encrypted;
+}
+
 bool WebSocketClient::VerifyAuthKey() {
   // 获取本地密钥
   std::string local_key = GetAuthKey();
@@ -685,30 +718,32 @@ bool WebSocketClient::VerifyAuthKey() {
     return false;
   }
 
-  LOG(INFO) << "[WebSocket] Local auth key: " << local_key;
+  // 加密本地密钥
+  std::string encrypted_local_key = EncryptKey(local_key);
 
-  // 从服务器接收期望的密钥
-  std::string server_key = ReceiveMessage(5000);
-  if (server_key.empty()) {
-    LOG(ERROR) << "[WebSocket] Failed to receive auth key from server";
+  // 向服务器发送加密后的密钥进行验证
+  LOG(INFO) << "[WebSocket] Sending encrypted auth key for verification";
+  SendFrame(encrypted_local_key);
+
+  // 从服务器接收验证结果
+  std::string server_response = ReceiveMessage(5000);
+  if (server_response.empty()) {
+    LOG(ERROR) << "[WebSocket] Failed to receive verification response from server";
     return false;
   }
 
-  LOG(INFO) << "[WebSocket] Server expects auth key: " << server_key;
+  LOG(INFO) << "[WebSocket] Server response: " << server_response;
 
-  // 比较密钥
-  if (local_key == server_key) {
+  // 检查服务器响应
+  if (server_response == "KEY_VERIFIED") {
     LOG(INFO) << "[WebSocket] Auth key verification successful";
     mac_verified_ = true;
-
-    // 发送验证成功响应
-    SendFrame("KEY_VERIFIED");
     return true;
+  } else if (server_response == "KEY_VERIFICATION_FAILED") {
+    LOG(ERROR) << "[WebSocket] Auth key verification failed!";
+    return false;
   } else {
-    LOG(ERROR) << "[WebSocket] Auth key verification failed: local=" << local_key << ", server=" << server_key;
-
-    // 发送验证失败响应
-    SendFrame("KEY_VERIFICATION_FAILED");
+    LOG(ERROR) << "[WebSocket] Unexpected server response: " << server_response;
     return false;
   }
 }
