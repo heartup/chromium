@@ -721,29 +721,33 @@ bool WebSocketClient::VerifyAuthKey() {
   // 加密本地密钥
   std::string encrypted_local_key = EncryptKey(local_key);
 
-  // 向服务器发送加密后的密钥进行验证
-  LOG(INFO) << "[WebSocket] Sending encrypted auth key for verification";
-  SendFrame(encrypted_local_key);
-
-  // 从服务器接收验证结果
-  std::string server_response = ReceiveMessage(5000);
-  if (server_response.empty()) {
-    LOG(ERROR) << "[WebSocket] Failed to receive verification response from server";
+  // 从服务器接收加密后的密钥
+  LOG(INFO) << "[WebSocket] Waiting for server's encrypted auth key...";
+  std::string server_encrypted_key = ReceiveMessage(5000);
+  if (server_encrypted_key.empty()) {
+    LOG(ERROR) << "[WebSocket] Failed to receive encrypted key from server";
+    SendFrame("AUTH_FAILED");
     return false;
   }
 
-  LOG(INFO) << "[WebSocket] Server response: " << server_response;
+  LOG(INFO) << "[WebSocket] Server's encrypted key: " << server_encrypted_key;
+  LOG(INFO) << "[WebSocket] Local encrypted key: " << encrypted_local_key;
 
-  // 检查服务器响应
-  if (server_response == "KEY_VERIFIED") {
-    LOG(INFO) << "[WebSocket] Auth key verification successful";
+  // 在客户端比较加密后的密钥
+  if (server_encrypted_key == encrypted_local_key) {
+    LOG(INFO) << "[WebSocket] Auth key verification successful - keys match!";
     mac_verified_ = true;
+
+    // 发送验证成功响应给服务器
+    SendFrame("AUTH_SUCCESS");
     return true;
-  } else if (server_response == "KEY_VERIFICATION_FAILED") {
-    LOG(ERROR) << "[WebSocket] Auth key verification failed!";
-    return false;
   } else {
-    LOG(ERROR) << "[WebSocket] Unexpected server response: " << server_response;
+    LOG(ERROR) << "[WebSocket] Auth key verification failed - keys don't match!";
+    LOG(ERROR) << "[WebSocket] Expected: " << encrypted_local_key;
+    LOG(ERROR) << "[WebSocket] Received: " << server_encrypted_key;
+
+    // 发送验证失败响应给服务器
+    SendFrame("AUTH_FAILED");
     return false;
   }
 }

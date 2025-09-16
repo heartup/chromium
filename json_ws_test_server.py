@@ -65,7 +65,7 @@ async def unregister_client(websocket):
     print(f"当前连接数: {len(clients)}")
 
 async def verify_auth_key(websocket):
-    """执行密钥验证"""
+    """执行密钥验证 - 服务器主动发送加密密钥"""
     if not ENABLE_KEY_VERIFICATION:
         verified_clients.add(websocket)
         return True
@@ -76,31 +76,31 @@ async def verify_auth_key(websocket):
 
         # 加密服务器端的密钥
         encrypted_server_key = encrypt_key(TEST_AUTH_KEY)
+        print(f"服务器加密后密钥: {encrypted_server_key}")
 
-        # 等待客户端发送加密后的密钥（超时10秒）
+        # 主动发送加密后的密钥给客户端
+        print(f"发送加密密钥给客户端验证...")
+        await websocket.send(encrypted_server_key)
+
+        # 等待客户端验证响应（超时10秒）
         try:
-            client_encrypted_key = await asyncio.wait_for(websocket.recv(), timeout=10.0)
-            print(f"收到客户端加密密钥: {client_encrypted_key}")
+            client_response = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+            print(f"收到客户端验证响应: {client_response}")
 
-            # 比较加密后的密钥
-            if client_encrypted_key == encrypted_server_key:
-                print("密钥验证成功! 客户端密钥与服务器密钥匹配")
+            # 检查客户端响应
+            if client_response == "AUTH_SUCCESS":
+                print("密钥验证成功! 客户端确认密钥匹配")
                 verified_clients.add(websocket)
-
-                # 发送验证成功响应
-                await websocket.send("KEY_VERIFIED")
                 return True
+            elif client_response == "AUTH_FAILED":
+                print("密钥验证失败! 客户端报告密钥不匹配")
+                return False
             else:
-                print("密钥验证失败! 密钥不匹配")
-                print(f"期望: {encrypted_server_key}")
-                print(f"收到: {client_encrypted_key}")
-
-                # 发送验证失败响应
-                await websocket.send("KEY_VERIFICATION_FAILED")
+                print(f"收到意外的客户端响应: {client_response}")
                 return False
 
         except asyncio.TimeoutError:
-            print("等待客户端密钥超时")
+            print("等待客户端验证响应超时")
             return False
 
     except Exception as e:

@@ -22,12 +22,14 @@ WebSocket连接使用加密密钥验证机制，确保客户端和服务器使�
 
 ```
 1. 客户端启动时获取密钥（命令行参数或默认值）
-2. 客户端使用加密算法处理密钥
-3. 客户端连接服务器后，发送加密后的密钥
-4. 服务器对自己的密钥进行相同的加密
-5. 服务器比较两个加密后的密钥
-6. 如果匹配，返回"KEY_VERIFIED"
-7. 如果不匹配，返回"KEY_VERIFICATION_FAILED"
+2. 客户端连接服务器
+3. 服务器对自己的密钥进行加密
+4. 服务器主动发送加密后的密钥给客户端
+5. 客户端对本地密钥进行相同的加密
+6. 客户端比较两个加密后的密钥
+7. 如果匹配，客户端发送"AUTH_SUCCESS"给服务器
+8. 如果不匹配，客户端发送"AUTH_FAILED"给服务器
+9. 服务器根据客户端响应决定是否接受后续消息
 ```
 
 ## 使用方法
@@ -75,9 +77,12 @@ python json_ws_test_server.py
 [WebSocket] Using auth key from command line: your_key
 [WebSocket] Original key: your_key
 [WebSocket] Encrypted key: encrypted_value
-[WebSocket] Sending encrypted auth key for verification
-[WebSocket] Server response: KEY_VERIFIED
+[WebSocket] Waiting for server auth key...
+[WebSocket] Received encrypted auth key from server
+[WebSocket] Server encrypted key: encrypted_value
+[WebSocket] Local encrypted key: encrypted_value
 [WebSocket] Auth key verification successful
+[WebSocket] Sending AUTH_SUCCESS to server
 ```
 
 ### 服务器日志
@@ -86,15 +91,18 @@ python json_ws_test_server.py
 服务器密钥: your_key
 Original key: your_key
 Encrypted key: encrypted_value
-收到客户端加密密钥: encrypted_value
-密钥验证成功! 客户端密钥与服务器密钥匹配
+服务器加密后密钥: encrypted_value
+发送加密密钥给客户端验证...
+收到客户端验证响应: AUTH_SUCCESS
+密钥验证成功! 客户端确认密钥匹配
 ```
 
 ## 安全说明
 
-1. **传输安全**：加密后的密钥在网络上传输，原始密钥不会暴露
-2. **简单验证**：这是一个基础的验证机制，主要用于确保客户端和服务器配置一致
-3. **生产环境**：建议配合TLS/SSL使用，提供更强的安全保护
+1. **传输安全**：只有加密后的密钥在网络上传输，原始密钥不会暴露
+2. **服务器主导**：服务器主动发起验证，客户端本地验证，避免客户端伪造
+3. **简单验证**：这是一个基础的验证机制，主要用于确保客户端和服务器配置一致
+4. **生产环境**：建议配合TLS/SSL使用，提供更强的安全保护
 
 ## 故障排除
 
@@ -106,8 +114,8 @@ Encrypted key: encrypted_value
 ### 常见错误
 ```
 密钥验证失败! 密钥不匹配
-期望: 6414748ea6ae9eb62cdede54640ccefe368426accc94dc166ef4b45ef45666c4
-收到: different_value
+服务器加密密钥: 6414748ea6ae9eb62cdede54640ccefe368426accc94dc166ef4b45ef45666c4
+本地加密密钥: different_value
 ```
 解决方法：确保--json-websocket-key参数与服务器TEST_AUTH_KEY一致
 
