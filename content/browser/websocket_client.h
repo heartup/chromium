@@ -67,6 +67,15 @@ class WebSocketClient {
   // 接收并处理帧（用于处理ping/pong）
   bool ReceiveFrame();
 
+  // 接收字符串消息
+  std::string ReceiveMessage(int timeout_ms = 5000);
+
+  // 获取本机MAC地址
+  std::string GetLocalMacAddress();
+
+  // 验证MAC地址
+  bool VerifyMacAddress();
+
  private:
   // WebSocket握手
   bool PerformHandshake(const std::string& host, const std::string& path);
@@ -85,6 +94,7 @@ class WebSocketClient {
 
   SocketHandle socket_fd_;
   std::atomic<bool> connected_;
+  std::atomic<bool> mac_verified_;  // MAC地址验证标志
   std::string host_;
   int port_;
   std::mutex send_mutex_;

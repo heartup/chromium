@@ -17,6 +17,7 @@
 #include "base/logging.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "net/base/network_interfaces.h"
 
 #if _WIN32
 #pragma comment(lib, "ws2_32.lib")
@@ -49,7 +50,7 @@ static WebSocketClient*& GetGlobalWebSocketClientRef() {
 }
 
 WebSocketClient::WebSocketClient()
-    : socket_fd_(InvalidSocket), connected_(false), port_(0) {}
+    : socket_fd_(InvalidSocket), connected_(false), mac_verified_(false), port_(0) {}
 
 WebSocketClient::~WebSocketClient() {
   Disconnect();
@@ -126,6 +127,15 @@ bool WebSocketClient::Connect(const std::string& host, int port, const std::stri
   }
 
   connected_ = true;
+
+  // 连接建立后，立即进行MAC地址验证
+  if (!VerifyMacAddress()) {
+    LOG(ERROR) << "MAC address verification failed!";
+    Disconnect();
+    return false;
+  }
+
+  LOG(INFO) << "MAC address verification successful";
   return true;
 }
 
@@ -178,7 +188,7 @@ bool WebSocketClient::PerformHandshake(const std::string& host, const std::strin
   bool has_upgrade = response.find("Upgrade: websocket") != std::string::npos ||
                      response.find("upgrade: websocket") != std::string::npos;
 
-  LOG(INFO) << "Handshake check - 101: " << (has_101 ? "YES" : "NO") 
+  LOG(INFO) << "Handshake check - 101: " << (has_101 ? "YES" : "NO")
             << ", Upgrade: " << (has_upgrade ? "YES" : "NO");
 
   return has_101 && has_upgrade;
@@ -187,6 +197,12 @@ bool WebSocketClient::PerformHandshake(const std::string& host, const std::strin
 bool WebSocketClient::SendMessage(const std::string& message) {
   if (!connected_.load()) {
     LOG(WARNING) << "WebSocket not connected in SendMessage";
+    return false;
+  }
+
+  // 检查MAC地址是否已验证
+  if (!mac_verified_.load()) {
+    LOG(ERROR) << "Cannot send message: MAC address not verified";
     return false;
   }
 
@@ -517,6 +533,7 @@ void WebSocketClient::Disconnect() {
     socket_fd_ = InvalidSocket;
   }
   connected_ = false;
+  mac_verified_ = false;  // 重置MAC验证状态
 #if _WIN32
   CleanupWinsock();
 #endif
@@ -554,6 +571,168 @@ std::string WebSocketClient::Base64Encode(const std::string& data) {
   if (valb > -6) result.push_back(chars[((val << 8) >> (valb + 8)) & 0x3F]);
   while (result.size() % 4) result.push_back('=');
   return result;
+}
+
+std::string WebSocketClient::ReceiveMessage(int timeout_ms) {
+  if (!connected_.load() || socket_fd_ == InvalidSocket) {
+    LOG(ERROR) << "ReceiveMessage: Not connected or invalid socket";
+    return "";
+  }
+
+  // 设置socket超时
+  struct timeval tv;
+  tv.tv_sec = timeout_ms / 1000;
+  tv.tv_usec = (timeout_ms % 1000) * 1000;
+  setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+
+  // 读取帧头（2字节）
+  uint8_t header[2];
+  ssize_t received = recv(socket_fd_, reinterpret_cast<char*>(header), 2, 0);
+  if (received != 2) {
+    LOG(ERROR) << "Failed to receive frame header";
+    return "";
+  }
+
+  uint8_t opcode = header[0] & 0x0F;
+  bool masked = (header[1] & 0x80) != 0;
+  uint64_t payload_length = header[1] & 0x7F;
+
+  // 读取扩展长度（如果需要）
+  if (payload_length == 126) {
+    uint8_t extended_length[2];
+    recv(socket_fd_, reinterpret_cast<char*>(extended_length), 2, 0);
+    UNSAFE_BUFFERS({
+      payload_length = (extended_length[0] << 8) | extended_length[1];
+    });
+  } else if (payload_length == 127) {
+    uint8_t extended_length[8];
+    recv(socket_fd_, reinterpret_cast<char*>(extended_length), 8, 0);
+    payload_length = 0;
+    UNSAFE_BUFFERS({
+      for (int i = 0; i < 8; i++) {
+        payload_length = (payload_length << 8) | extended_length[i];
+      }
+    });
+  }
+
+  // 读取掩码（如果有）
+  uint8_t mask[4] = {0};
+  if (masked) {
+    recv(socket_fd_, reinterpret_cast<char*>(mask), 4, 0);
+  }
+
+  // 读取payload
+  std::vector<uint8_t> payload(payload_length);
+  if (payload_length > 0) {
+    ssize_t total_received = 0;
+    while (total_received < static_cast<ssize_t>(payload_length)) {
+      ssize_t bytes;
+      UNSAFE_BUFFERS({
+        bytes = recv(socket_fd_,
+                     reinterpret_cast<char*>(payload.data() + total_received),
+                     static_cast<int>(payload_length - total_received), 0);
+      });
+      if (bytes <= 0) {
+        LOG(ERROR) << "Failed to receive complete payload";
+        return "";
+      }
+      total_received += bytes;
+    }
+  }
+
+  // 解掩码（如果需要）
+  if (masked) {
+    UNSAFE_BUFFERS({
+      for (size_t i = 0; i < payload_length; i++) {
+        payload[i] ^= mask[i % 4];
+      }
+    });
+  }
+
+  // 恢复默认超时
+  tv.tv_sec = 0;
+  tv.tv_usec = 0;
+  setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+
+  // 转换为字符串（如果是文本帧）
+  if (opcode == 0x01) {  // 文本帧
+    return std::string(payload.begin(), payload.end());
+  }
+
+  return "";
+}
+
+std::string WebSocketClient::GetLocalMacAddress() {
+  net::NetworkInterfaceList networks;
+  if (!net::GetNetworkList(&networks, net::INCLUDE_HOST_SCOPE_VIRTUAL_INTERFACES)) {
+    LOG(ERROR) << "Failed to get network interface list";
+    return "";
+  }
+
+  // 查找第一个有MAC地址的非虚拟网络接口
+  for (const auto& interface : networks) {
+    // 跳过回环接口和没有MAC地址的接口
+    if (interface.type == net::NetworkChangeNotifier::CONNECTION_NONE ||
+        !interface.mac_address.has_value()) {
+      continue;
+    }
+
+    // 获取MAC地址
+    const net::Eui48MacAddress& mac = interface.mac_address.value();
+
+    // 格式化为字符串 (xx:xx:xx:xx:xx:xx)
+    std::stringstream ss;
+    ss << std::hex << std::setfill('0');
+    for (size_t i = 0; i < mac.size(); ++i) {
+      if (i > 0) ss << ":";
+      ss << std::setw(2) << static_cast<int>(mac[i]);
+    }
+
+    LOG(INFO) << "Found MAC address for interface " << interface.name << ": " << ss.str();
+    return ss.str();
+  }
+
+  LOG(ERROR) << "No network interface with MAC address found";
+  return "20:0d:b0:1c:1b:05";
+}
+
+bool WebSocketClient::VerifyMacAddress() {
+  // 获取本机MAC地址
+  std::string local_mac = GetLocalMacAddress();
+  if (local_mac.empty()) {
+    LOG(ERROR) << "Failed to get local MAC address";
+    return false;
+  }
+
+  LOG(INFO) << "Local MAC address: " << local_mac;
+
+  // 从服务器接收MAC地址字符串
+  std::string server_mac = ReceiveMessage(5000);
+  if (server_mac.empty()) {
+    LOG(ERROR) << "Failed to receive MAC address from server";
+    return false;
+  }
+
+  LOG(INFO) << "Server sent MAC address: " << server_mac;
+
+  // 比较MAC地址（忽略大小写）
+  std::transform(local_mac.begin(), local_mac.end(), local_mac.begin(), ::tolower);
+  std::transform(server_mac.begin(), server_mac.end(), server_mac.begin(), ::tolower);
+
+  if (local_mac == server_mac) {
+    LOG(INFO) << "MAC address verification successful";
+    mac_verified_ = true;
+
+    // 发送验证成功响应
+    SendFrame("MAC_VERIFIED");
+    return true;
+  } else {
+    LOG(ERROR) << "MAC address verification failed: local=" << local_mac << ", server=" << server_mac;
+
+    // 发送验证失败响应
+    SendFrame("MAC_VERIFICATION_FAILED");
+    return false;
+  }
 }
 
 // 全局函数实现
