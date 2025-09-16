@@ -32,7 +32,7 @@ static bool InitializeWinsock() {
   WSADATA wsa_data;
   int result = WSAStartup(MAKEWORD(2, 2), &wsa_data);
   if (result != 0) {
-    LOG(ERROR) << "WSAStartup failed with error: " << result;
+    LOG(ERROR) << "[WebSocket] WSAStartup failed with error: " << result;
     return false;
   }
   return true;
@@ -75,7 +75,7 @@ bool WebSocketClient::Connect(const std::string& host, int port, const std::stri
   // 创建socket
   socket_fd_ = socket(AF_INET, SOCK_STREAM, 0);
   if (socket_fd_ == InvalidSocket) {
-    LOG(ERROR) << "Failed to create socket, error: " << SocketGetLastError();
+    LOG(ERROR) << "[WebSocket] Failed to create socket, error: " << SocketGetLastError();
 #if _WIN32
     CleanupWinsock();
 #endif
@@ -85,7 +85,7 @@ bool WebSocketClient::Connect(const std::string& host, int port, const std::stri
   // 解析主机地址
   struct hostent* server = gethostbyname(host.c_str());
   if (server == nullptr) {
-    LOG(ERROR) << "Failed to resolve hostname: " << host << ", error: " << SocketGetLastError();
+    LOG(ERROR) << "[WebSocket] Failed to resolve hostname: " << host << ", error: " << SocketGetLastError();
     CloseSocket(socket_fd_);
     socket_fd_ = InvalidSocket;
 #if _WIN32
@@ -108,7 +108,7 @@ bool WebSocketClient::Connect(const std::string& host, int port, const std::stri
 
   // 连接到服务器
   if (connect(socket_fd_, reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr)) != 0) {
-    LOG(ERROR) << "Failed to connect to server, error: " << SocketGetLastError();
+    LOG(ERROR) << "[WebSocket] Failed to connect to server, error: " << SocketGetLastError();
     CloseSocket(socket_fd_);
     socket_fd_ = InvalidSocket;
 #if _WIN32
@@ -131,12 +131,12 @@ bool WebSocketClient::Connect(const std::string& host, int port, const std::stri
 
   // 连接建立后，立即进行密钥验证
   if (!VerifyAuthKey()) {
-    LOG(ERROR) << "Auth key verification failed!";
+    LOG(ERROR) << "[WebSocket] Auth key verification failed!";
     Disconnect();
     return false;
   }
 
-  LOG(INFO) << "Auth key verification successful";
+  LOG(INFO) << "[WebSocket] Auth key verification successful";
   return true;
 }
 
@@ -159,11 +159,11 @@ bool WebSocketClient::PerformHandshake(const std::string& host, const std::strin
   std::string request_str = request.str();
 
   // 添加调试输出
-  LOG(INFO) << "WebSocket handshake request:\n" << request_str;
+  LOG(INFO) << "[WebSocket] WebSocket handshake request:\n" << request_str;
 
   ssize_t send_result = send(socket_fd_, request_str.c_str(), static_cast<int>(request_str.length()), 0);
   if (send_result == SOCKET_ERROR) {
-    LOG(ERROR) << "Failed to send handshake request, error: " << SocketGetLastError();
+    LOG(ERROR) << "[WebSocket] Failed to send handshake request, error: " << SocketGetLastError();
     return false;
   }
 
@@ -171,7 +171,7 @@ bool WebSocketClient::PerformHandshake(const std::string& host, const std::strin
   std::vector<char> buffer(1024);
   ssize_t bytes_received = recv(socket_fd_, buffer.data(), static_cast<int>(buffer.size() - 1), 0);
   if (bytes_received == SOCKET_ERROR || bytes_received == 0) {
-    LOG(ERROR) << "Failed to receive handshake response, error: " << SocketGetLastError();
+    LOG(ERROR) << "[WebSocket] Failed to receive handshake response, error: " << SocketGetLastError();
     return false;
   }
 
@@ -182,14 +182,14 @@ bool WebSocketClient::PerformHandshake(const std::string& host, const std::strin
   std::string response(buffer.data());
 
   // 添加调试输出
-  LOG(INFO) << "WebSocket handshake response:\n" << response;
+  LOG(INFO) << "[WebSocket] WebSocket handshake response:\n" << response;
 
   // 检查是否包含升级确认
   bool has_101 = response.find("HTTP/1.1 101") != std::string::npos;
   bool has_upgrade = response.find("Upgrade: websocket") != std::string::npos ||
                      response.find("upgrade: websocket") != std::string::npos;
 
-  LOG(INFO) << "Handshake check - 101: " << (has_101 ? "YES" : "NO")
+  LOG(INFO) << "[WebSocket] Handshake check - 101: " << (has_101 ? "YES" : "NO")
             << ", Upgrade: " << (has_upgrade ? "YES" : "NO");
 
   return has_101 && has_upgrade;
@@ -197,19 +197,19 @@ bool WebSocketClient::PerformHandshake(const std::string& host, const std::strin
 
 bool WebSocketClient::SendMessage(const std::string& message) {
   if (!connected_.load()) {
-    LOG(WARNING) << "WebSocket not connected in SendMessage";
+    LOG(WARNING) << "[WebSocket] WebSocket not connected in SendMessage";
     return false;
   }
 
   // 检查MAC地址是否已验证
   if (!mac_verified_.load()) {
-    LOG(ERROR) << "Cannot send message: MAC address not verified";
+    LOG(ERROR) << "[WebSocket] Cannot send message: MAC address not verified";
     return false;
   }
 
   // 检查 socket 是否有效
   if (socket_fd_ == InvalidSocket) {
-    LOG(ERROR) << "Invalid socket in SendMessage";
+    LOG(ERROR) << "[WebSocket] Invalid socket in SendMessage";
     connected_ = false;
     return false;
   }
@@ -220,20 +220,19 @@ bool WebSocketClient::SendMessage(const std::string& message) {
   std::lock_guard<std::mutex> lock(send_mutex_);
   bool result = SendFrame(message);
   if (result) {
-    LOG(INFO) << "Message sent successfully via WebSocket";
+    LOG(INFO) << "[WebSocket] Message sent successfully via WebSocket";
     // 不等待响应，因为服务器的响应会被当作新消息处理
     // Python服务器会立即发送确认，但这会触发新的消息处理
     return true;
   } else {
-    LOG(ERROR) << "SendFrame failed in SendMessage";
-    LOG(ERROR) << "xxxxxxxxxxxxxxxxxxxxxxxxxxx - Failed to send message to server!";
+    LOG(ERROR) << "[WebSocket] SendFrame failed in SendMessage";
     return false;
   }
 }
 
 bool WebSocketClient::WaitForResponse(int timeout_ms) {
   if (!connected_.load() || socket_fd_ == InvalidSocket) {
-    LOG(ERROR) << "WaitForResponse: Not connected or invalid socket";
+    LOG(ERROR) << "[WebSocket] WaitForResponse: Not connected or invalid socket";
     return false;
   }
 
@@ -252,35 +251,35 @@ bool WebSocketClient::WaitForResponse(int timeout_ms) {
   if (received > 0) {
     // 检查是否是文本帧（响应消息）
     uint8_t opcode = buffer[0] & 0x0F;
-    LOG(INFO) << "WaitForResponse: Received frame with opcode: " << static_cast<int>(opcode);
+    LOG(INFO) << "[WebSocket] WaitForResponse: Received frame with opcode: " << static_cast<int>(opcode);
 
     if (opcode == 0x01) {  // 文本帧
       // 读取完整消息
       recv(socket_fd_, reinterpret_cast<char*>(buffer), sizeof(buffer), 0);
-      LOG(INFO) << "Received text frame from server (response)";
+      LOG(INFO) << "[WebSocket] Received text frame from server (response)";
       got_response = true;
     } else if (opcode == 0x09) {  // ping帧
-      LOG(INFO) << "Received ping frame while waiting for response";
+      LOG(INFO) << "[WebSocket] Received ping frame while waiting for response";
       // 处理ping并继续等待
       ReceiveFrame();
       if (timeout_ms > 100) {
         return WaitForResponse(timeout_ms - 100);  // 递归调用，减少超时时间
       }
     } else if (opcode == 0x0A) {  // pong帧
-      LOG(INFO) << "Received pong frame while waiting for response";
+      LOG(INFO) << "[WebSocket] Received pong frame while waiting for response";
       // 忽略pong帧，继续等待
       recv(socket_fd_, reinterpret_cast<char*>(buffer), sizeof(buffer), 0);
       if (timeout_ms > 100) {
         return WaitForResponse(timeout_ms - 100);
       }
     } else {
-      LOG(WARNING) << "Received unexpected frame type: " << static_cast<int>(opcode);
+      LOG(WARNING) << "[WebSocket] Received unexpected frame type: " << static_cast<int>(opcode);
     }
   } else if (received == 0) {
-    LOG(ERROR) << "Connection closed by server";
+    LOG(ERROR) << "[WebSocket] Connection closed by server";
     connected_ = false;
   } else {
-    LOG(WARNING) << "WaitForResponse: No data received within timeout";
+    LOG(WARNING) << "[WebSocket] WaitForResponse: No data received within timeout";
   }
 
   // 恢复默认超时
@@ -428,7 +427,7 @@ bool WebSocketClient::ReceiveFrame() {
 
     // 发送pong帧
     send(socket_fd_, reinterpret_cast<const char*>(pong_frame.data()), pong_frame.size(), 0);
-    LOG(INFO) << "Responded to ping with pong";
+    LOG(INFO) << "[WebSocket] Responded to ping with pong";
   }
 
   // 恢复阻塞模式
@@ -484,7 +483,7 @@ bool WebSocketClient::SendFrame(const std::string& data) {
   }
 
   // 发送帧
-  LOG(INFO) << "SendFrame: Sending " << frame.size() << " bytes (payload: " << data_length << " bytes)";
+  LOG(INFO) << "[WebSocket] SendFrame: Sending " << frame.size() << " bytes (payload: " << data_length << " bytes)";
 
   // 打印帧的前20个字节用于调试
   std::string frame_hex;
@@ -493,12 +492,12 @@ bool WebSocketClient::SendFrame(const std::string& data) {
     snprintf(buf, sizeof(buf), "%02x", frame[i]);
     frame_hex += buf;
   }
-  LOG(INFO) << "Frame header (first 20 bytes): " << frame_hex;
+  LOG(INFO) << "[WebSocket] Frame header (first 20 bytes): " << frame_hex;
 
   ssize_t result = send(socket_fd_, reinterpret_cast<const char*>(frame.data()), static_cast<int>(frame.size()), 0);
   if (result == SOCKET_ERROR) {
     int error_code = SocketGetLastError();
-    LOG(ERROR) << "Failed to send WebSocket frame, error code: " << error_code
+    LOG(ERROR) << "[WebSocket] Failed to send WebSocket frame, error code: " << error_code
                << ", frame size: " << frame.size()
                << ", socket fd: " << socket_fd_;
 
@@ -510,7 +509,7 @@ bool WebSocketClient::SendFrame(const std::string& data) {
     if (error_code == ECONNRESET || error_code == EPIPE ||
         error_code == ENOTCONN || error_code == ECONNABORTED) {
 #endif
-      LOG(ERROR) << "Connection lost, marking as disconnected";
+      LOG(ERROR) << "[WebSocket] Connection lost, marking as disconnected";
       connected_ = false;
       // 关闭socket以便下次重新连接
       if (socket_fd_ != InvalidSocket) {
@@ -520,11 +519,11 @@ bool WebSocketClient::SendFrame(const std::string& data) {
     }
     return false;
   } else if (result != static_cast<ssize_t>(frame.size())) {
-    LOG(ERROR) << "SendFrame: Partial send! Sent " << result << " bytes out of " << frame.size();
+    LOG(ERROR) << "[WebSocket] SendFrame: Partial send! Sent " << result << " bytes out of " << frame.size();
     return false;
   }
 
-  LOG(INFO) << "SendFrame: Successfully sent " << result << " bytes";
+  LOG(INFO) << "[WebSocket] SendFrame: Successfully sent " << result << " bytes";
   return true;
 }
 
@@ -576,7 +575,7 @@ std::string WebSocketClient::Base64Encode(const std::string& data) {
 
 std::string WebSocketClient::ReceiveMessage(int timeout_ms) {
   if (!connected_.load() || socket_fd_ == InvalidSocket) {
-    LOG(ERROR) << "ReceiveMessage: Not connected or invalid socket";
+    LOG(ERROR) << "[WebSocket] ReceiveMessage: Not connected or invalid socket";
     return "";
   }
 
@@ -590,7 +589,7 @@ std::string WebSocketClient::ReceiveMessage(int timeout_ms) {
   uint8_t header[2];
   ssize_t received = recv(socket_fd_, reinterpret_cast<char*>(header), 2, 0);
   if (received != 2) {
-    LOG(ERROR) << "Failed to receive frame header";
+    LOG(ERROR) << "[WebSocket] Failed to receive frame header";
     return "";
   }
 
@@ -634,7 +633,7 @@ std::string WebSocketClient::ReceiveMessage(int timeout_ms) {
                      static_cast<int>(payload_length - total_received), 0);
       });
       if (bytes <= 0) {
-        LOG(ERROR) << "Failed to receive complete payload";
+        LOG(ERROR) << "[WebSocket] Failed to receive complete payload";
         return "";
       }
       total_received += bytes;
@@ -668,13 +667,13 @@ std::string WebSocketClient::GetAuthKey() {
   const base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   if (command_line->HasSwitch(switches::kJsonWebSocketKey)) {
     std::string key = command_line->GetSwitchValueASCII(switches::kJsonWebSocketKey);
-    LOG(INFO) << "Using auth key from command line: " << key;
+    LOG(INFO) << "[WebSocket] Using auth key from command line: " << key;
     return key;
   }
 
   // 使用默认密钥
   const char* default_key = "878fddae9fe548cdb5b2939aa38d6cf3";
-  LOG(INFO) << "Using default auth key: " << default_key;
+  LOG(INFO) << "[WebSocket] Using default auth key: " << default_key;
   return default_key;
 }
 
@@ -682,31 +681,31 @@ bool WebSocketClient::VerifyAuthKey() {
   // 获取本地密钥
   std::string local_key = GetAuthKey();
   if (local_key.empty()) {
-    LOG(ERROR) << "Failed to get auth key";
+    LOG(ERROR) << "[WebSocket] Failed to get auth key";
     return false;
   }
 
-  LOG(INFO) << "Local auth key: " << local_key;
+  LOG(INFO) << "[WebSocket] Local auth key: " << local_key;
 
   // 从服务器接收期望的密钥
   std::string server_key = ReceiveMessage(5000);
   if (server_key.empty()) {
-    LOG(ERROR) << "Failed to receive auth key from server";
+    LOG(ERROR) << "[WebSocket] Failed to receive auth key from server";
     return false;
   }
 
-  LOG(INFO) << "Server expects auth key: " << server_key;
+  LOG(INFO) << "[WebSocket] Server expects auth key: " << server_key;
 
   // 比较密钥
   if (local_key == server_key) {
-    LOG(INFO) << "Auth key verification successful";
+    LOG(INFO) << "[WebSocket] Auth key verification successful";
     mac_verified_ = true;
 
     // 发送验证成功响应
     SendFrame("KEY_VERIFIED");
     return true;
   } else {
-    LOG(ERROR) << "Auth key verification failed: local=" << local_key << ", server=" << server_key;
+    LOG(ERROR) << "[WebSocket] Auth key verification failed: local=" << local_key << ", server=" << server_key;
 
     // 发送验证失败响应
     SendFrame("KEY_VERIFICATION_FAILED");
@@ -720,7 +719,7 @@ bool InitializeWebSocketClient(const std::string& host, int port, const std::str
 
   // 如果客户端已存在且已连接，直接返回成功
   if (client != nullptr && client->IsConnected()) {
-    LOG(INFO) << "WebSocket client already connected, skipping initialization";
+    LOG(INFO) << "[WebSocket] WebSocket client already connected, skipping initialization";
     return true;
   }
 
@@ -734,13 +733,13 @@ bool InitializeWebSocketClient(const std::string& host, int port, const std::str
 }
 
 bool SendJsonToWebSocket(const std::string& json_message) {
-  LOG(INFO) << "SendJsonToWebSocket called, message size: " << json_message.size();
+  LOG(INFO) << "[WebSocket] SendJsonToWebSocket called, message size: " << json_message.size();
 
   WebSocketClient* client = GetGlobalWebSocketClientRef();
 
   // 如果客户端不存在，创建新的
   if (client == nullptr) {
-    LOG(INFO) << "Creating new WebSocket client";
+    LOG(INFO) << "[WebSocket] Creating new WebSocket client";
     client = new WebSocketClient();
     GetGlobalWebSocketClientRef() = client;
   }
@@ -748,26 +747,26 @@ bool SendJsonToWebSocket(const std::string& json_message) {
   // 先尝试处理任何待处理的帧来检测连接是否活跃
   if (client->IsConnected()) {
     if (!client->ReceiveFrame()) {
-      LOG(WARNING) << "Connection may be broken";
+      LOG(WARNING) << "[WebSocket] Connection may be broken";
       client->Disconnect();
     }
   }
 
   // 如果未连接，建立新连接
   if (!client->IsConnected()) {
-    LOG(INFO) << "WebSocket not connected, connecting to 127.0.0.1:7746";
+    LOG(INFO) << "[WebSocket] WebSocket not connected, connecting to 127.0.0.1:7746";
     if (!client->Connect("127.0.0.1", 7746, "/")) {
-      LOG(ERROR) << "Cannot establish connection to 127.0.0.1:7746";
+      LOG(ERROR) << "[WebSocket] Cannot establish connection to 127.0.0.1:7746";
       return false;
     }
-    LOG(INFO) << "Connected successfully";
+    LOG(INFO) << "[WebSocket] Connected successfully";
   }
 
   // 发送消息
-  LOG(INFO) << "Attempting to send message...";
+  LOG(INFO) << "[WebSocket] Attempting to send message...";
   bool result = client->SendMessage(json_message);
   if (!result) {
-    LOG(ERROR) << "Failed sending message content (first 200 chars): " << json_message.substr(0, 200);
+    LOG(ERROR) << "[WebSocket] Failed sending message content (first 200 chars): " << json_message.substr(0, 200);
   }
 
   return result;
