@@ -903,9 +903,28 @@ void WebSocketClient::HeartbeatThread() {
 
   auto last_heartbeat = std::chrono::steady_clock::now();
 
-  while (heartbeat_running_.load() && connected_.load()) {
+  while (heartbeat_running_.load()) {
+    // 检查连接状态
+    if (!connected_.load()) {
+      LOG(WARNING) << "[WebSocket] Connection lost, attempting to reconnect...";
+      Reconnect();
+      if (!connected_.load()) {
+        // 重连失败，等待一段时间后再试
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        continue;
+      }
+      // 重连成功，重置心跳计时器
+      last_heartbeat = std::chrono::steady_clock::now();
+    }
+
     // 持续接收帧，处理服务器可能发送的Ping
-    ReceiveFrame();
+    if (!ReceiveFrame()) {
+      // ReceiveFrame 返回 false 表示连接可能有问题
+      if (connected_.load()) {
+        LOG(WARNING) << "[WebSocket] ReceiveFrame failed but still marked as connected";
+        // 可能是连接断开了，下一轮循环会处理
+      }
+    }
 
     // 检查是否到了发送心跳的时间
     auto now = std::chrono::steady_clock::now();
@@ -920,7 +939,7 @@ void WebSocketClient::HeartbeatThread() {
     // 重置心跳计时器
     last_heartbeat = now;
 
-    if (!heartbeat_running_.load() || !connected_.load()) {
+    if (!heartbeat_running_.load()) {
       break;
     }
 
