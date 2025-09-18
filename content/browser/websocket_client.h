@@ -8,6 +8,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <queue>
+#include <chrono>
 
 #if _WIN32
 #include <windows.h>
@@ -95,12 +96,30 @@ class WebSocketClient {
   // SHA1哈希
   std::string Sha1Hash(const std::string& data);
 
+  // 心跳相关方法
+  void StartHeartbeat();
+  void StopHeartbeat();
+  void HeartbeatThread();
+  bool CheckPongTimeout();
+  void Reconnect();
+
   SocketHandle socket_fd_;
   std::atomic<bool> connected_;
   std::atomic<bool> mac_verified_;  // MAC地址验证标志
   std::string host_;
   int port_;
+  std::string path_;  // 保存连接路径用于重连
   std::mutex send_mutex_;
+
+  // 心跳机制相关成员
+  std::thread heartbeat_thread_;
+  std::atomic<bool> heartbeat_running_;
+  std::atomic<bool> waiting_pong_;
+  std::chrono::steady_clock::time_point last_ping_time_;
+  std::chrono::steady_clock::time_point last_pong_time_;
+  std::mutex heartbeat_mutex_;
+  static constexpr int kHeartbeatIntervalSeconds = 30;  // 30秒心跳间隔
+  static constexpr int kPongTimeoutSeconds = 10;  // 10秒Pong超时
 };
 
 // WebSocket客户端由内部函数管理，不需要外部访问全局实例

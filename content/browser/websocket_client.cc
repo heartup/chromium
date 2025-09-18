@@ -51,9 +51,15 @@ static WebSocketClient*& GetGlobalWebSocketClientRef() {
 }
 
 WebSocketClient::WebSocketClient()
-    : socket_fd_(InvalidSocket), connected_(false), mac_verified_(false), port_(0) {}
+    : socket_fd_(InvalidSocket),
+      connected_(false),
+      mac_verified_(false),
+      port_(0),
+      heartbeat_running_(false),
+      waiting_pong_(false) {}
 
 WebSocketClient::~WebSocketClient() {
+  StopHeartbeat();
   Disconnect();
 }
 
@@ -71,6 +77,7 @@ bool WebSocketClient::Connect(const std::string& host, int port, const std::stri
 
   host_ = host;
   port_ = port;
+  path_ = path;  // 保存路径用于重连
 
   // 创建socket
   socket_fd_ = socket(AF_INET, SOCK_STREAM, 0);
@@ -137,6 +144,10 @@ bool WebSocketClient::Connect(const std::string& host, int port, const std::stri
   }
 
   LOG(INFO) << "[WebSocket] Auth key verification successful";
+
+  // 启动心跳线程
+  StartHeartbeat();
+
   return true;
 }
 
@@ -355,8 +366,50 @@ bool WebSocketClient::ReceiveFrame() {
 
   uint8_t opcode = header[0] & 0x0F;
 
+  // 如果是pong帧(0x0A)，更新最后接收时间
+  if (opcode == 0x0A) {
+    // 读取完整的pong帧
+    recv(socket_fd_, reinterpret_cast<char*>(header), 2, 0);
+
+    bool masked = (header[1] & 0x80) != 0;
+    uint64_t payload_length = header[1] & 0x7F;
+
+    // 读取扩展长度（如果需要）
+    if (payload_length == 126) {
+      uint8_t extended_length[2];
+      recv(socket_fd_, reinterpret_cast<char*>(extended_length), 2, 0);
+      UNSAFE_BUFFERS({
+        payload_length = (extended_length[0] << 8) | extended_length[1];
+      });
+    } else if (payload_length == 127) {
+      uint8_t extended_length[8];
+      recv(socket_fd_, reinterpret_cast<char*>(extended_length), 8, 0);
+      // 跳过这么大的pong，不太可能
+    }
+
+    // 读取掩码（如果有）
+    if (masked) {
+      uint8_t mask[4];
+      recv(socket_fd_, reinterpret_cast<char*>(mask), 4, 0);
+    }
+
+    // 读取并丢弃payload
+    if (payload_length > 0) {
+      std::vector<uint8_t> discard(payload_length);
+      recv(socket_fd_, reinterpret_cast<char*>(discard.data()), payload_length, 0);
+    }
+
+    // 更新pong接收时间
+    {
+      std::lock_guard<std::mutex> lock(heartbeat_mutex_);
+      last_pong_time_ = std::chrono::steady_clock::now();
+      waiting_pong_ = false;
+    }
+
+    LOG(INFO) << "[WebSocket] Received pong response";
+  }
   // 如果是ping帧(0x09)，发送pong响应
-  if (opcode == 0x09) {
+  else if (opcode == 0x09) {
     // 读取完整的ping帧
     recv(socket_fd_, reinterpret_cast<char*>(header), 2, 0);
 
@@ -528,6 +581,8 @@ bool WebSocketClient::SendFrame(const std::string& data) {
 }
 
 void WebSocketClient::Disconnect() {
+  StopHeartbeat();  // 停止心跳线程
+
   if (socket_fd_ != InvalidSocket) {
     CloseSocket(socket_fd_);
     socket_fd_ = InvalidSocket;
@@ -817,6 +872,210 @@ void CleanupWebSocketClient() {
     client->Disconnect();
     delete client;
     client = nullptr;
+  }
+}
+
+// 心跳机制实现
+void WebSocketClient::StartHeartbeat() {
+  if (heartbeat_running_.load()) {
+    return;
+  }
+
+  heartbeat_running_ = true;
+  heartbeat_thread_ = std::thread(&WebSocketClient::HeartbeatThread, this);
+  LOG(INFO) << "[WebSocket] Heartbeat thread started";
+}
+
+void WebSocketClient::StopHeartbeat() {
+  if (!heartbeat_running_.load()) {
+    return;
+  }
+
+  heartbeat_running_ = false;
+  if (heartbeat_thread_.joinable()) {
+    heartbeat_thread_.join();
+  }
+  LOG(INFO) << "[WebSocket] Heartbeat thread stopped";
+}
+
+void WebSocketClient::HeartbeatThread() {
+  LOG(INFO) << "[WebSocket] Heartbeat thread running";
+
+  auto last_heartbeat = std::chrono::steady_clock::now();
+
+  while (heartbeat_running_.load() && connected_.load()) {
+    // 持续接收帧，处理服务器可能发送的Ping
+    ReceiveFrame();
+
+    // 检查是否到了发送心跳的时间
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_heartbeat).count();
+
+    if (elapsed < kHeartbeatIntervalSeconds) {
+      // 还没到心跳时间，短暂休眠后继续监听
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      continue;
+    }
+
+    // 重置心跳计时器
+    last_heartbeat = now;
+
+    if (!heartbeat_running_.load() || !connected_.load()) {
+      break;
+    }
+
+    // 发送Ping
+    LOG(INFO) << "[WebSocket] Sending ping...";
+    {
+      std::lock_guard<std::mutex> lock(heartbeat_mutex_);
+      if (SendPing()) {
+        last_ping_time_ = std::chrono::steady_clock::now();
+        waiting_pong_ = true;
+      } else {
+        LOG(ERROR) << "[WebSocket] Failed to send ping";
+        Reconnect();
+        continue;
+      }
+    }
+
+    // 等待Pong响应，期间持续接收帧
+    auto start_wait = std::chrono::steady_clock::now();
+    bool pong_received = false;
+
+    while (heartbeat_running_.load() && connected_.load()) {
+      // 尝试接收帧（可能是Pong或服务器的Ping）
+      ReceiveFrame();
+
+      // 检查是否收到Pong
+      {
+        std::lock_guard<std::mutex> lock(heartbeat_mutex_);
+        if (!waiting_pong_) {
+          pong_received = true;
+          break;
+        }
+      }
+
+      // 检查是否超时
+      auto current_time = std::chrono::steady_clock::now();
+      auto wait_elapsed = std::chrono::duration_cast<std::chrono::seconds>(current_time - start_wait).count();
+      if (wait_elapsed >= kPongTimeoutSeconds) {
+        break;
+      }
+
+      // 短暂休眠避免CPU占用过高
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    // 如果没有收到Pong，尝试重连
+    if (!pong_received && heartbeat_running_.load()) {
+      LOG(ERROR) << "[WebSocket] Pong timeout, reconnecting...";
+      Reconnect();
+    }
+  }
+
+  LOG(INFO) << "[WebSocket] Heartbeat thread exiting";
+}
+
+bool WebSocketClient::CheckPongTimeout() {
+  std::lock_guard<std::mutex> lock(heartbeat_mutex_);
+
+  if (!waiting_pong_) {
+    // 已经收到pong
+    return true;
+  }
+
+  auto now = std::chrono::steady_clock::now();
+  auto time_since_ping = std::chrono::duration_cast<std::chrono::seconds>(
+      now - last_ping_time_).count();
+
+  if (time_since_ping >= kPongTimeoutSeconds) {
+    LOG(WARNING) << "[WebSocket] Pong timeout detected, "
+                 << time_since_ping << " seconds since last ping";
+    return false;
+  }
+
+  return true;
+}
+
+void WebSocketClient::Reconnect() {
+  LOG(INFO) << "[WebSocket] Attempting to reconnect...";
+
+  // 先断开现有连接
+  connected_ = false;
+  if (socket_fd_ != InvalidSocket) {
+    CloseSocket(socket_fd_);
+    socket_fd_ = InvalidSocket;
+  }
+
+  // 等待一小段时间
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+
+  // 尝试重新连接
+  if (!host_.empty() && port_ > 0) {
+    // 重新建立连接（不使用Connect因为会递归调用StartHeartbeat）
+    #if _WIN32
+    if (!InitializeWinsock()) {
+      LOG(ERROR) << "[WebSocket] Failed to initialize Winsock for reconnect";
+      return;
+    }
+    #endif
+
+    socket_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (socket_fd_ == InvalidSocket) {
+      LOG(ERROR) << "[WebSocket] Failed to create socket for reconnect";
+      return;
+    }
+
+    struct hostent* server = gethostbyname(host_.c_str());
+    if (server == nullptr) {
+      LOG(ERROR) << "[WebSocket] Failed to resolve hostname for reconnect";
+      CloseSocket(socket_fd_);
+      socket_fd_ = InvalidSocket;
+      return;
+    }
+
+    struct sockaddr_in server_addr = {};
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(static_cast<uint16_t>(port_));
+    if (server->h_length == sizeof(server_addr.sin_addr.s_addr)) {
+      UNSAFE_BUFFERS({
+        std::memcpy(&server_addr.sin_addr.s_addr, server->h_addr, server->h_length);
+      });
+    }
+
+    if (connect(socket_fd_, reinterpret_cast<struct sockaddr*>(&server_addr),
+                sizeof(server_addr)) != 0) {
+      LOG(ERROR) << "[WebSocket] Failed to connect to server for reconnect";
+      CloseSocket(socket_fd_);
+      socket_fd_ = InvalidSocket;
+      return;
+    }
+
+    if (!PerformHandshake(host_, path_)) {
+      LOG(ERROR) << "[WebSocket] Handshake failed during reconnect";
+      CloseSocket(socket_fd_);
+      socket_fd_ = InvalidSocket;
+      return;
+    }
+
+    connected_ = true;
+
+    // 重新进行密钥验证
+    if (!VerifyAuthKey()) {
+      LOG(ERROR) << "[WebSocket] Auth key verification failed during reconnect";
+      connected_ = false;
+      CloseSocket(socket_fd_);
+      socket_fd_ = InvalidSocket;
+      return;
+    }
+
+    LOG(INFO) << "[WebSocket] Reconnected successfully";
+
+    // 重置心跳状态
+    {
+      std::lock_guard<std::mutex> lock(heartbeat_mutex_);
+      waiting_pong_ = false;
+    }
   }
 }
 
