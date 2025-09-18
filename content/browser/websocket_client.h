@@ -80,6 +80,9 @@ class WebSocketClient {
   // 验证密钥
   bool VerifyAuthKey();
 
+  // 重连（公有方法，供外部调用）
+  void Reconnect();
+
  private:
   // WebSocket握手
   bool PerformHandshake(const std::string& host, const std::string& path);
@@ -101,7 +104,6 @@ class WebSocketClient {
   void StopHeartbeat();
   void HeartbeatThread();
   bool CheckPongTimeout();
-  void Reconnect();
 
   SocketHandle socket_fd_;
   std::atomic<bool> connected_;
@@ -110,6 +112,7 @@ class WebSocketClient {
   int port_;
   std::string path_;  // 保存连接路径用于重连
   std::mutex send_mutex_;
+  std::mutex connect_mutex_;  // 保护连接/断开/重连操作
 
   // 心跳机制相关成员
   std::thread heartbeat_thread_;

@@ -64,7 +64,11 @@ WebSocketClient::~WebSocketClient() {
 }
 
 bool WebSocketClient::Connect(const std::string& host, int port, const std::string& path) {
+  std::lock_guard<std::mutex> lock(connect_mutex_);
+
+  // 再次检查连接状态（双重检查锁定）
   if (connected_.load()) {
+    LOG(INFO) << "[WebSocket] Already connected, skipping connection attempt";
     return true;
   }
 
@@ -581,7 +585,11 @@ bool WebSocketClient::SendFrame(const std::string& data) {
 }
 
 void WebSocketClient::Disconnect() {
-  StopHeartbeat();  // 停止心跳线程
+  // 先停止心跳线程，避免它继续尝试重连
+  StopHeartbeat();
+
+  // 加锁保护断开操作
+  std::lock_guard<std::mutex> lock(connect_mutex_);
 
   if (socket_fd_ != InvalidSocket) {
     CloseSocket(socket_fd_);
@@ -836,24 +844,26 @@ bool SendJsonToWebSocket(const std::string& json_message) {
     LOG(INFO) << "[WebSocket] Creating new WebSocket client";
     client = new WebSocketClient();
     GetGlobalWebSocketClientRef() = client;
-  }
 
-  // 先尝试处理任何待处理的帧来检测连接是否活跃
-  if (client->IsConnected()) {
-    if (!client->ReceiveFrame()) {
-      LOG(WARNING) << "[WebSocket] Connection may be broken";
-      client->Disconnect();
-    }
-  }
-
-  // 如果未连接，建立新连接
-  if (!client->IsConnected()) {
-    LOG(INFO) << "[WebSocket] WebSocket not connected, connecting to 127.0.0.1:7746";
+    // 首次连接使用 Connect
     if (!client->Connect("127.0.0.1", 7746, "/")) {
-      LOG(ERROR) << "[WebSocket] Cannot establish connection to 127.0.0.1:7746";
+      LOG(ERROR) << "[WebSocket] Cannot establish initial connection to 127.0.0.1:7746";
       return false;
     }
-    LOG(INFO) << "[WebSocket] Connected successfully";
+    LOG(INFO) << "[WebSocket] Initial connection established successfully";
+  } else {
+    // 已有客户端，检查连接状态
+    if (!client->IsConnected()) {
+      LOG(INFO) << "[WebSocket] WebSocket not connected, attempting reconnect";
+      // 使用 Reconnect 而不是 Connect，避免重复连接
+      client->Reconnect();
+
+      if (!client->IsConnected()) {
+        LOG(ERROR) << "[WebSocket] Reconnect failed";
+        return false;
+      }
+      LOG(INFO) << "[WebSocket] Reconnected successfully";
+    }
   }
 
   // 发送消息
@@ -1017,17 +1027,30 @@ bool WebSocketClient::CheckPongTimeout() {
 }
 
 void WebSocketClient::Reconnect() {
+  std::lock_guard<std::mutex> lock(connect_mutex_);
+
+  // 再次检查连接状态，避免重复重连
+  if (connected_.load()) {
+    LOG(INFO) << "[WebSocket] Already connected during reconnect attempt";
+    return;
+  }
+
   LOG(INFO) << "[WebSocket] Attempting to reconnect...";
 
-  // 先断开现有连接
-  connected_ = false;
+  // 先确保旧连接完全关闭
   if (socket_fd_ != InvalidSocket) {
     CloseSocket(socket_fd_);
     socket_fd_ = InvalidSocket;
   }
 
-  // 等待一小段时间
+  // 等待一小段时间，让旧连接完全关闭
   std::this_thread::sleep_for(std::chrono::seconds(2));
+
+  // 再次检查连接状态（可能其他线程已经重连成功）
+  if (connected_.load()) {
+    LOG(INFO) << "[WebSocket] Connection established by another thread during wait";
+    return;
+  }
 
   // 尝试重新连接
   if (!host_.empty() && port_ > 0) {
@@ -1077,6 +1100,12 @@ void WebSocketClient::Reconnect() {
       return;
     }
 
+    // 设置连接状态前先检查是否被其他线程关闭
+    if (socket_fd_ == InvalidSocket) {
+      LOG(WARNING) << "[WebSocket] Socket closed during reconnect";
+      return;
+    }
+
     connected_ = true;
 
     // 重新进行密钥验证
@@ -1092,7 +1121,7 @@ void WebSocketClient::Reconnect() {
 
     // 重置心跳状态
     {
-      std::lock_guard<std::mutex> lock(heartbeat_mutex_);
+      std::lock_guard<std::mutex> heartbeat_lock(heartbeat_mutex_);
       waiting_pong_ = false;
     }
   }

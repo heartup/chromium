@@ -19,3 +19,5 @@ Android WebView, Ash). Even if these products have multiple executables, the
 code should be in subdirectories of the product.
 
 If you found a bug, please file it at https://crbug.com/new.
+
+启动chrome  debug 信息 out/release-141/chrome --enable-logging=stderr --v=1 2>&1  | grep --line-buffered "WebSocket"
