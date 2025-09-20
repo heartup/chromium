@@ -77,6 +77,8 @@
 #include "content/browser/worker_host/shared_worker_host.h"
 #include "content/browser/xr/service/vr_service_impl.h"
 #include "content/browser/json_websocket_service_impl.h"
+#include "content/browser/json_websocket_service_impl_v2.h"
+#include "content/browser/storage_partition_impl.h"
 #include "content/common/input/input_injector.mojom.h"
 #include "content/common/json_websocket.mojom.h"
 #include "content/public/browser/browser_thread.h"
@@ -750,8 +752,21 @@ void PopulateFrameBinders(RenderFrameHostImpl* host, mojo::BinderMap* map) {
   map->Add<blink::mojom::ContactsManager>(
       base::BindRepeating(ContactsManagerImpl::Create, base::Unretained(host)));
 
+  // Use V2 implementation with NetworkContext for better integration
   map->Add<mojom::JsonWebSocketService>(
-      base::BindRepeating(&JsonWebSocketServiceImpl::Create));
+      base::BindRepeating([](RenderFrameHostImpl* host,
+                             mojo::PendingReceiver<mojom::JsonWebSocketService> receiver) {
+        auto* storage_partition = host->GetStoragePartition();
+        if (storage_partition && storage_partition->GetNetworkContext()) {
+          // Use new V2 implementation with NetworkContext
+          JsonWebSocketServiceImplV2::Create(
+              storage_partition->GetNetworkContext(),
+              std::move(receiver));
+        } else {
+          // Fallback to original implementation if NetworkContext unavailable
+          JsonWebSocketServiceImpl::Create(std::move(receiver));
+        }
+      }, base::Unretained(host)));
 
   map->Add<blink::mojom::ContentSecurityNotifier>(base::BindRepeating(
       [](RenderFrameHostImpl* host,
