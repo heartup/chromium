@@ -130,12 +130,8 @@ class CONTENT_EXPORT NetworkWebSocketManager
   ConnectionCallback connection_callback_;
   MessageCallback message_callback_;
 
-  // Heartbeat mechanism
-  base::RepeatingTimer heartbeat_timer_;
-  base::OneShotTimer ping_timeout_timer_;
-  bool waiting_for_pong_ = false;
-  static constexpr base::TimeDelta kHeartbeatInterval = base::Seconds(30);
-  static constexpr base::TimeDelta kPingTimeout = base::Seconds(10);
+  // Heartbeat mechanism (kept for interface compatibility, but unused)
+  // Chrome's WebSocket layer handles Ping/Pong automatically
 
   // Application state (Android)
   bool app_in_foreground_ = true;
@@ -147,6 +143,10 @@ class CONTENT_EXPORT NetworkWebSocketManager
 
   // Message buffer for partial messages
   std::string message_buffer_;
+
+  // Authentication state
+  bool waiting_for_auth_ = false;
+  std::string expected_auth_key_;
 
   base::WeakPtrFactory<NetworkWebSocketManager> weak_factory_{this};
 };

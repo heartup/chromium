@@ -164,6 +164,8 @@ void NetworkWebSocketManager::Disconnect() {
   connected_ = false;
   connecting_ = false;
   authenticated_ = false;
+  waiting_for_auth_ = false;
+  expected_auth_key_.clear();
   message_buffer_.clear();
 }
 
@@ -178,22 +180,23 @@ void NetworkWebSocketManager::OnApplicationStateChange(bool is_foreground) {
     // Returning from background
     auto background_duration = base::TimeTicks::Now() - background_time_;
 
-    if (background_duration > base::Seconds(30)) {
-      LOG(INFO) << "[NetworkWebSocket] Long background period, reconnecting";
+    if (background_duration > base::Minutes(2)) {
+      LOG(INFO) << "[NetworkWebSocket] Long background period (>2 min), reconnecting";
       HandleReconnect();
-    } else if (connected_) {
-      // Short background period, test connection
+    } else if (connected_ && authenticated_) {
+      // Short background period, test connection with heartbeat
+      LOG(INFO) << "[NetworkWebSocket] Testing connection after background";
       SendPing();
     }
   } else if (!is_foreground) {
     // Going to background
     background_time_ = base::TimeTicks::Now();
+    LOG(INFO) << "[NetworkWebSocket] App going to background, stopping heartbeat";
 
-    // Send keep-alive ping before background
-    if (connected_) {
-      SendPing();
-    }
+    // Stop heartbeat in background to avoid unnecessary traffic
+    StopHeartbeat();
   }
+
 }
 
 // WebSocketHandshakeClient implementation
@@ -259,9 +262,15 @@ void NetworkWebSocketManager::OnConnectionEstablished(
       base::BindRepeating(&NetworkWebSocketManager::OnDataPipeWritable,
                          weak_factory_.GetWeakPtr()));
 
-  // Perform authentication
+  LOG(INFO) << "[NetworkWebSocket] Data pipe watchers setup complete";
+
+  // Start receiving WebSocket frames
+  LOG(INFO) << "[NetworkWebSocket] Starting to receive WebSocket frames";
+  websocket_->StartReceiving();
+
+  // Start authentication process (async)
   if (!PerformAuthentication()) {
-    LOG(ERROR) << "[NetworkWebSocket] Authentication failed";
+    LOG(ERROR) << "[NetworkWebSocket] Failed to start authentication";
     Disconnect();
     if (connection_callback_) {
       std::move(connection_callback_).Run(false);
@@ -269,29 +278,40 @@ void NetworkWebSocketManager::OnConnectionEstablished(
     return;
   }
 
-  // Start heartbeat
-  StartHeartbeat();
-
-  if (connection_callback_) {
-    std::move(connection_callback_).Run(true);
-  }
+  // Note: Heartbeat will start after successful authentication
+  // Connection callback will be called after auth completes
 }
 
 // WebSocketClient implementation
 void NetworkWebSocketManager::OnDataFrame(bool fin,
                                           network::mojom::WebSocketMessageType type,
                                           uint64_t data_length) {
-  LOG(INFO) << "[NetworkWebSocket] Data frame received: fin=" << fin
+  LOG(INFO) << "[NetworkWebSocket] *** OnDataFrame called: fin=" << fin
             << ", type=" << static_cast<int>(type)
             << ", length=" << data_length;
 
+  // Always read if there's data available
   if (data_length > 0) {
+    LOG(INFO) << "[NetworkWebSocket] Reading " << data_length << " bytes from data pipe";
     ReadFromDataPipe();
   }
 
-  if (fin && !message_buffer_.empty()) {
-    ProcessReceivedMessage(message_buffer_);
-    message_buffer_.clear();
+  // Process complete message when fin=true
+  if (fin) {
+    LOG(INFO) << "[NetworkWebSocket] Message complete (fin=true), buffer size: " << message_buffer_.size();
+    if (!message_buffer_.empty()) {
+      ProcessReceivedMessage(message_buffer_);
+      message_buffer_.clear();
+    } else {
+      // Even if buffer is empty, there might be data in the pipe
+      LOG(INFO) << "[NetworkWebSocket] Buffer empty, trying to read from pipe";
+      ReadFromDataPipe();
+      if (!message_buffer_.empty()) {
+        LOG(INFO) << "[NetworkWebSocket] Found data in pipe, processing";
+        ProcessReceivedMessage(message_buffer_);
+        message_buffer_.clear();
+      }
+    }
   }
 }
 
@@ -302,10 +322,13 @@ void NetworkWebSocketManager::OnDropChannel(bool was_clean,
             << ", code=" << code << ", reason=" << reason;
 
   connected_ = false;
+  authenticated_ = false;
   StopHeartbeat();
 
-  // Auto-reconnect if in foreground
-  if (app_in_foreground_ && !was_clean) {
+  // Auto-reconnect for any disconnection when in foreground
+  // This ensures we maintain connection as long as browser is active
+  if (app_in_foreground_) {
+    LOG(INFO) << "[NetworkWebSocket] Will reconnect in 3 seconds";
     HandleReconnect();
   }
 }
@@ -317,84 +340,63 @@ void NetworkWebSocketManager::OnClosingHandshake() {
 
 // Heartbeat implementation
 void NetworkWebSocketManager::StartHeartbeat() {
-  if (heartbeat_timer_.IsRunning())
-    return;
-
-  LOG(INFO) << "[NetworkWebSocket] Starting heartbeat timer";
-
-  heartbeat_timer_.Start(FROM_HERE, kHeartbeatInterval,
-                        base::BindRepeating(&NetworkWebSocketManager::SendPing,
-                                          weak_factory_.GetWeakPtr()));
+  // Chrome's WebSocket implementation handles keepalive automatically
+  // No need for application-level heartbeat
+  LOG(INFO) << "[NetworkWebSocket] WebSocket layer handles keepalive automatically";
 }
 
 void NetworkWebSocketManager::StopHeartbeat() {
-  heartbeat_timer_.Stop();
-  ping_timeout_timer_.Stop();
-  waiting_for_pong_ = false;
+  // No heartbeat to stop since WebSocket layer handles it
 }
 
 void NetworkWebSocketManager::SendPing() {
-  if (!connected_ || !websocket_)
-    return;
-
-  // Skip ping if app is in background
-  if (!app_in_foreground_) {
-    LOG(INFO) << "[NetworkWebSocket] Skipping ping in background";
-    return;
-  }
-
-  LOG(INFO) << "[NetworkWebSocket] Sending ping";
-
-  // Send ping frame through WebSocket
-  websocket_->SendMessage(network::mojom::WebSocketMessageType::BINARY, 0);
-
-  waiting_for_pong_ = true;
-  ping_timeout_timer_.Start(FROM_HERE, kPingTimeout,
-                           base::BindOnce(&NetworkWebSocketManager::OnPingTimeout,
-                                        weak_factory_.GetWeakPtr()));
+  // Chrome's WebSocket implementation handles Ping/Pong automatically
+  // This method is kept for compatibility but does nothing
+  LOG(INFO) << "[NetworkWebSocket] WebSocket layer handles Ping/Pong automatically";
 }
 
 void NetworkWebSocketManager::OnPingTimeout() {
-  if (waiting_for_pong_) {
-    LOG(WARNING) << "[NetworkWebSocket] Ping timeout, reconnecting";
-    HandleReconnect();
-  }
+  // Not used since WebSocket layer handles Ping/Pong
 }
 
 void NetworkWebSocketManager::HandleReconnect() {
-  if (connecting_)
+  if (connecting_ || !current_url_.is_valid())
     return;
 
-  LOG(INFO) << "[NetworkWebSocket] Attempting reconnect";
+  LOG(INFO) << "[NetworkWebSocket] Scheduling reconnect";
 
-  Disconnect();
+  // Save the URL before any cleanup
+  GURL saved_url = current_url_;
 
-  // Reconnect using saved URL
-  if (!current_url_.is_empty()) {
-    Connect(current_url_.host(), current_url_.EffectiveIntPort(),
-           current_url_.path(), ConnectionCallback());
-  }
+  // Schedule reconnect with delay to avoid rapid loops
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&NetworkWebSocketManager::Connect,
+                    weak_factory_.GetWeakPtr(),
+                    saved_url.host(),
+                    saved_url.EffectiveIntPort(),
+                    saved_url.path(),
+                    ConnectionCallback()),
+      base::Seconds(3));
 }
 
 // Authentication (preserving existing mechanism)
 bool NetworkWebSocketManager::PerformAuthentication() {
-  LOG(INFO) << "[NetworkWebSocket] Performing authentication";
+  LOG(INFO) << "[NetworkWebSocket] Starting authentication process";
 
-  // Get and encrypt auth key
+  // Get and encrypt our auth key for comparison
   std::string auth_key = GetAuthKey();
-  std::string encrypted_key = EncryptKey(auth_key);
+  expected_auth_key_ = EncryptKey(auth_key);
 
-  // For now, we'll set authenticated to true and handle async later
-  // In production, this would wait for server response
-  authenticated_ = true;
+  LOG(INFO) << "[NetworkWebSocket] Waiting for server auth key...";
 
-  // Schedule sending auth key after connection is fully established
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&NetworkWebSocketManager::WriteToDataPipe,
-                    weak_factory_.GetWeakPtr(), encrypted_key));
+  // Don't set authenticated yet - wait for server's key
+  authenticated_ = false;
+  waiting_for_auth_ = true;
 
-  return authenticated_;
+  // Return true to indicate auth process started (not completed)
+  // Actual authentication happens in ProcessReceivedMessage
+  return true;
 }
 
 std::string NetworkWebSocketManager::GetAuthKey() {
@@ -443,12 +445,18 @@ std::string NetworkWebSocketManager::EncryptKey(const std::string& key) {
 
 // Data pipe handling
 void NetworkWebSocketManager::ReadFromDataPipe() {
+  if (!readable_pipe_.is_valid()) {
+    LOG(ERROR) << "[NetworkWebSocket] Readable pipe is not valid";
+    return;
+  }
+
   while (true) {
     base::span<const uint8_t> buffer;
     MojoResult result = readable_pipe_->BeginReadData(
         MOJO_READ_DATA_FLAG_NONE, buffer);
 
     if (result == MOJO_RESULT_SHOULD_WAIT) {
+      LOG(INFO) << "[NetworkWebSocket] No more data to read (SHOULD_WAIT)";
       return;
     }
 
@@ -457,6 +465,7 @@ void NetworkWebSocketManager::ReadFromDataPipe() {
       return;
     }
 
+    LOG(INFO) << "[NetworkWebSocket] Read " << buffer.size() << " bytes from data pipe";
     message_buffer_.append(reinterpret_cast<const char*>(buffer.data()),
                           buffer.size());
     readable_pipe_->EndReadData(buffer.size());
@@ -497,6 +506,8 @@ void NetworkWebSocketManager::OnDataPipeWritable(MojoResult result) {
 }
 
 void NetworkWebSocketManager::OnDataPipeReadable(MojoResult result) {
+  LOG(INFO) << "[NetworkWebSocket] Data pipe readable signal: " << result;
+
   if (result != MOJO_RESULT_OK) {
     LOG(ERROR) << "[NetworkWebSocket] Readable pipe error: " << result;
     return;
@@ -508,15 +519,57 @@ void NetworkWebSocketManager::OnDataPipeReadable(MojoResult result) {
 void NetworkWebSocketManager::ProcessReceivedMessage(const std::string& message) {
   LOG(INFO) << "[NetworkWebSocket] Received message: " << message.substr(0, 100);
 
-  // Check for pong response
-  if (waiting_for_pong_) {
-    waiting_for_pong_ = false;
-    ping_timeout_timer_.Stop();
-    LOG(INFO) << "[NetworkWebSocket] Pong received";
+  // Handle authentication flow first
+  if (waiting_for_auth_ && !authenticated_) {
+    LOG(INFO) << "[NetworkWebSocket] Received auth key from server: " << message;
+
+    // Compare server's key with our encrypted key
+    std::string response;
+    if (message == expected_auth_key_) {
+      LOG(INFO) << "[NetworkWebSocket] Authentication keys match";
+      response = "AUTH_SUCCESS";
+      authenticated_ = true;
+      waiting_for_auth_ = false;
+
+      // No need for application-level heartbeat - WebSocket layer handles it
+
+      // Notify connection callback of success
+      if (connection_callback_) {
+        std::move(connection_callback_).Run(true);
+      }
+    } else {
+      LOG(ERROR) << "[NetworkWebSocket] Authentication failed - key mismatch";
+      LOG(ERROR) << "[NetworkWebSocket] Expected: " << expected_auth_key_;
+      LOG(ERROR) << "[NetworkWebSocket] Received: " << message;
+      response = "AUTH_FAILED";
+      authenticated_ = false;
+      waiting_for_auth_ = false;
+
+      // Disconnect on auth failure
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&NetworkWebSocketManager::Disconnect,
+                        weak_factory_.GetWeakPtr()));
+
+      // Notify connection callback of failure
+      if (connection_callback_) {
+        std::move(connection_callback_).Run(false);
+      }
+    }
+
+    // Send authentication response
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&NetworkWebSocketManager::WriteToDataPipe,
+                      weak_factory_.GetWeakPtr(), response));
+    return;
   }
 
-  // Process other message types
-  // This would include authentication responses, etc.
+  // Process application messages after authentication
+  if (authenticated_) {
+    LOG(INFO) << "[NetworkWebSocket] Processing application message: " << message.substr(0, 100);
+    // Add your message processing logic here
+  }
 }
 
 }  // namespace content
