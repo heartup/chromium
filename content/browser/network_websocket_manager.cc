@@ -250,17 +250,15 @@ void NetworkWebSocketManager::OnConnectionEstablished(
   writable_pipe_ = std::move(writable);
 
   // Setup watchers for data pipes
+  // Only watch for READABLE signal, not PEER_CLOSED to avoid spurious callbacks
   readable_watcher_.Watch(
       readable_pipe_.get(),
-      MOJO_HANDLE_SIGNAL_READABLE | MOJO_HANDLE_SIGNAL_PEER_CLOSED,
+      MOJO_HANDLE_SIGNAL_READABLE,
       base::BindRepeating(&NetworkWebSocketManager::OnDataPipeReadable,
                          weak_factory_.GetWeakPtr()));
 
-  writable_watcher_.Watch(
-      writable_pipe_.get(),
-      MOJO_HANDLE_SIGNAL_WRITABLE | MOJO_HANDLE_SIGNAL_PEER_CLOSED,
-      base::BindRepeating(&NetworkWebSocketManager::OnDataPipeWritable,
-                         weak_factory_.GetWeakPtr()));
+  // Only watch for WRITABLE signal when we have data to write
+  // Don't set up writable watcher here to avoid unnecessary callbacks
 
   LOG(INFO) << "[NetworkWebSocket] Data pipe watchers setup complete";
 
@@ -447,6 +445,7 @@ std::string NetworkWebSocketManager::EncryptKey(const std::string& key) {
 void NetworkWebSocketManager::ReadFromDataPipe() {
   if (!readable_pipe_.is_valid()) {
     LOG(ERROR) << "[NetworkWebSocket] Readable pipe is not valid";
+    readable_watcher_.Cancel();
     return;
   }
 
@@ -462,6 +461,15 @@ void NetworkWebSocketManager::ReadFromDataPipe() {
 
     if (result != MOJO_RESULT_OK) {
       LOG(ERROR) << "[NetworkWebSocket] Failed to read from pipe: " << result;
+      // Cancel watcher to prevent infinite loop
+      readable_watcher_.Cancel();
+
+      // Handle disconnection if pipe is broken
+      if (result == MOJO_RESULT_FAILED_PRECONDITION ||
+          result == MOJO_RESULT_CANCELLED) {
+        LOG(ERROR) << "[NetworkWebSocket] Pipe broken, triggering disconnection";
+        OnDropChannel(false, 1006, "Read pipe broken");
+      }
       return;
     }
 
@@ -473,8 +481,13 @@ void NetworkWebSocketManager::ReadFromDataPipe() {
 }
 
 void NetworkWebSocketManager::WriteToDataPipe(const std::string& data) {
-  if (!writable_pipe_.is_valid())
+  if (!writable_pipe_.is_valid()) {
+    LOG(ERROR) << "[NetworkWebSocket] Writable pipe is not valid";
+    if (message_callback_) {
+      std::move(message_callback_).Run(false);
+    }
     return;
+  }
 
   // Convert string to uint8_t span for Mojo
   base::span<const uint8_t> bytes = base::as_bytes(base::span(data));
@@ -484,6 +497,15 @@ void NetworkWebSocketManager::WriteToDataPipe(const std::string& data) {
 
   if (result != MOJO_RESULT_OK) {
     LOG(ERROR) << "[NetworkWebSocket] Failed to write to pipe: " << result;
+
+    // Cancel watcher if pipe is broken
+    if (result == MOJO_RESULT_FAILED_PRECONDITION ||
+        result == MOJO_RESULT_CANCELLED) {
+      writable_watcher_.Cancel();
+      LOG(ERROR) << "[NetworkWebSocket] Write pipe broken, triggering disconnection";
+      OnDropChannel(false, 1006, "Write pipe broken");
+    }
+
     if (message_callback_) {
       std::move(message_callback_).Run(false);
     }
@@ -502,6 +524,21 @@ void NetworkWebSocketManager::WriteToDataPipe(const std::string& data) {
 }
 
 void NetworkWebSocketManager::OnDataPipeWritable(MojoResult result) {
+  if (result != MOJO_RESULT_OK) {
+    LOG(ERROR) << "[NetworkWebSocket] Writable pipe error: " << result;
+    // Cancel watcher to prevent infinite loop
+    writable_watcher_.Cancel();
+
+    // Handle disconnection if pipe error is fatal
+    if (result == MOJO_RESULT_FAILED_PRECONDITION ||
+        result == MOJO_RESULT_CANCELLED ||
+        result == MOJO_RESULT_ABORTED) {
+      LOG(ERROR) << "[NetworkWebSocket] Fatal write pipe error, triggering disconnection";
+      OnDropChannel(false, 1006, "Write pipe error");
+    }
+    return;
+  }
+
   // Handle writable signal if needed for queued messages
 }
 
@@ -510,6 +547,16 @@ void NetworkWebSocketManager::OnDataPipeReadable(MojoResult result) {
 
   if (result != MOJO_RESULT_OK) {
     LOG(ERROR) << "[NetworkWebSocket] Readable pipe error: " << result;
+    // Cancel watcher to prevent infinite loop
+    readable_watcher_.Cancel();
+
+    // Handle disconnection if pipe error is fatal
+    if (result == MOJO_RESULT_FAILED_PRECONDITION ||
+        result == MOJO_RESULT_CANCELLED ||
+        result == MOJO_RESULT_ABORTED) {
+      LOG(ERROR) << "[NetworkWebSocket] Fatal pipe error, triggering disconnection";
+      OnDropChannel(false, 1006, "Read pipe error");
+    }
     return;
   }
 
