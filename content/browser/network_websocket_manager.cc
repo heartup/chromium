@@ -67,18 +67,27 @@ NetworkWebSocketManager::NetworkWebSocketManager(
 #if BUILDFLAG(IS_ANDROID)
   // Register application state listener for Android
   app_status_listener_ = base::android::ApplicationStatusListener::New(
-      base::BindRepeating([](NetworkWebSocketManager* manager,
-                            base::android::ApplicationState state) {
-        bool is_foreground =
-            (state == base::android::APPLICATION_STATE_HAS_RUNNING_ACTIVITIES ||
-             state == base::android::APPLICATION_STATE_HAS_PAUSED_ACTIVITIES);
-        manager->OnApplicationStateChange(is_foreground);
-      }, base::Unretained(this)));
+      base::BindRepeating(&NetworkWebSocketManager::OnApplicationStateChangeCallback,
+                         weak_factory_.GetWeakPtr()));
 #endif
 }
 
 NetworkWebSocketManager::~NetworkWebSocketManager() {
+  LOG(INFO) << "[NetworkWebSocket] Destructor called";
+
+  // Cancel all pending callbacks first
+  weak_factory_.InvalidateWeakPtrs();
+
+  // Cancel watchers before resetting pipes
+  readable_watcher_.Cancel();
+  writable_watcher_.Cancel();
+
+  // Now safe to disconnect
   Disconnect();
+
+#if BUILDFLAG(IS_ANDROID)
+  app_status_listener_.reset();
+#endif
 }
 
 void NetworkWebSocketManager::Connect(const std::string& host,
@@ -149,6 +158,10 @@ void NetworkWebSocketManager::Disconnect() {
 
   StopHeartbeat();
 
+  // Cancel watchers before closing pipes to avoid callbacks
+  readable_watcher_.Cancel();
+  writable_watcher_.Cancel();
+
   if (websocket_) {
     websocket_->StartClosingHandshake(1000, "Normal closure");
     websocket_.reset();
@@ -158,8 +171,6 @@ void NetworkWebSocketManager::Disconnect() {
   client_receiver_.reset();
   readable_pipe_.reset();
   writable_pipe_.reset();
-  readable_watcher_.Cancel();
-  writable_watcher_.Cancel();
 
   connected_ = false;
   connecting_ = false;
@@ -167,7 +178,21 @@ void NetworkWebSocketManager::Disconnect() {
   waiting_for_auth_ = false;
   expected_auth_key_.clear();
   message_buffer_.clear();
+
+  // Clear any pending callbacks
+  connection_callback_.Reset();
+  message_callback_.Reset();
 }
+
+#if BUILDFLAG(IS_ANDROID)
+void NetworkWebSocketManager::OnApplicationStateChangeCallback(
+    base::android::ApplicationState state) {
+  bool is_foreground =
+      (state == base::android::APPLICATION_STATE_HAS_RUNNING_ACTIVITIES ||
+       state == base::android::APPLICATION_STATE_HAS_PAUSED_ACTIVITIES);
+  OnApplicationStateChange(is_foreground);
+}
+#endif
 
 void NetworkWebSocketManager::OnApplicationStateChange(bool is_foreground) {
   LOG(INFO) << "[NetworkWebSocket] App state changed: "
@@ -366,7 +391,12 @@ void NetworkWebSocketManager::HandleReconnect() {
   // Save the URL before any cleanup
   GURL saved_url = current_url_;
 
+  // Reset connection state but keep URL
+  connected_ = false;
+  authenticated_ = false;
+
   // Schedule reconnect with delay to avoid rapid loops
+  // Use weak pointer to ensure safety if object is destroyed
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&NetworkWebSocketManager::Connect,

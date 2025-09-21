@@ -85,6 +85,11 @@ class CONTENT_EXPORT NetworkWebSocketManager
   void OnClosingHandshake() override;
 
  private:
+  // Android application state callback
+#if BUILDFLAG(IS_ANDROID)
+  void OnApplicationStateChangeCallback(base::android::ApplicationState state);
+#endif
+
   // Heartbeat mechanism
   void StartHeartbeat();
   void StopHeartbeat();
