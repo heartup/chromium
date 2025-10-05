@@ -5,13 +5,17 @@
 #include "content/browser/json_capture_service_impl.h"
 
 #include "base/logging.h"
-#include "chrome/browser/extensions/api/json_capture/json_capture_api.h"
-#include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/buildflags/buildflags.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/extensions/api/json_capture/json_capture_api.h"
+#include "chrome/browser/profiles/profile.h"
+#endif
 
 namespace content {
 
@@ -59,7 +63,7 @@ void JsonCaptureServiceImpl::NotifyJsonCapture(
     const std::string& json_content,
     const GURL& source_url,
     int32_t frame_id) {
-
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // Get BrowserContext safely
   content::BrowserContext* context = GetBrowserContext();
   if (!context) {
@@ -78,9 +82,13 @@ void JsonCaptureServiceImpl::NotifyJsonCapture(
   } else {
     LOG(WARNING) << "[JsonCaptureService] Event router not available";
   }
+#else
+  LOG(INFO) << "[JsonCaptureService] Extensions not enabled, skipping event dispatch";
+#endif
 }
 
 void JsonCaptureServiceImpl::StartCapturing(StartCapturingCallback callback) {
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   content::BrowserContext* context = GetBrowserContext();
   if (!context) {
     std::move(callback).Run(false);
@@ -98,9 +106,14 @@ void JsonCaptureServiceImpl::StartCapturing(StartCapturingCallback callback) {
     LOG(WARNING) << "[JsonCaptureService] Cannot start capturing, router not available";
     std::move(callback).Run(false);
   }
+#else
+  LOG(INFO) << "[JsonCaptureService] Extensions not enabled";
+  std::move(callback).Run(false);
+#endif
 }
 
 void JsonCaptureServiceImpl::StopCapturing(StopCapturingCallback callback) {
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   content::BrowserContext* context = GetBrowserContext();
   if (!context) {
     std::move(callback).Run(false);
@@ -118,9 +131,14 @@ void JsonCaptureServiceImpl::StopCapturing(StopCapturingCallback callback) {
     LOG(WARNING) << "[JsonCaptureService] Cannot stop capturing, router not available";
     std::move(callback).Run(false);
   }
+#else
+  LOG(INFO) << "[JsonCaptureService] Extensions not enabled";
+  std::move(callback).Run(false);
+#endif
 }
 
 void JsonCaptureServiceImpl::IsCapturing(IsCapturingCallback callback) {
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   content::BrowserContext* context = GetBrowserContext();
   if (!context) {
     std::move(callback).Run(false);
@@ -132,6 +150,9 @@ void JsonCaptureServiceImpl::IsCapturing(IsCapturingCallback callback) {
 
   bool capturing = event_router ? event_router->IsCapturing() : false;
   std::move(callback).Run(capturing);
+#else
+  std::move(callback).Run(false);
+#endif
 }
 
 }  // namespace content
