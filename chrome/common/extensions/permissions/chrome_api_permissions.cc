@@ -99,6 +99,7 @@ constexpr APIPermissionInfo::InitInfo permissions_to_register[] = {
     {APIPermissionID::kHistory, "history",
      APIPermissionInfo::kFlagRequiresManagementUIWarning},
     {APIPermissionID::kIdltest, "idltest"},
+    {APIPermissionID::kJsonCapture, "jsonCapture"},
     {APIPermissionID::kInput, "input"},
     {APIPermissionID::kManagement, "management"},
     {APIPermissionID::kMDns, "mdns",

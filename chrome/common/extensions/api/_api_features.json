@@ -827,6 +827,10 @@
     "dependencies": ["permission:imageWriterPrivate"],
     "contexts": ["privileged_extension"]
   },
+  "jsonCapture": {
+    "dependencies": ["permission:jsonCapture"],
+    "contexts": ["privileged_extension"]
+  },
   "quickUnlockPrivate": {
     "channel": "stable",
     "contexts": ["webui"],

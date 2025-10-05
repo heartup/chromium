@@ -693,6 +693,8 @@ source_set("browser") {
     "json_websocket_service_impl.h",
     "json_websocket_service_impl_v2.cc",
     "json_websocket_service_impl_v2.h",
+    "json_capture_service_impl.cc",
+    "json_capture_service_impl.h",
     "network_websocket_manager.cc",
     "network_websocket_manager.h",
     "websocket_client.cc",

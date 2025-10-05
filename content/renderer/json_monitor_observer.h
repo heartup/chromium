@@ -4,22 +4,49 @@
 #include "content/public/renderer/render_frame_observer.h"
 #include "content/renderer/render_frame_impl.h"
 
+#include "base/memory/raw_ptr.h"
+#include "base/synchronization/lock.h"
 #include "v8/include/v8-context.h"
 #include <string>
 #include <memory>
+#include <map>
 
 namespace content {
 
+class JsonCaptureClient;
+
+// Global manager for all JSON monitors across frames
+class JSONMonitorManager {
+ public:
+  static JSONMonitorManager* GetInstance();
+
+  JSONMonitorManager();
+  ~JSONMonitorManager();
+
+  JSONMonitorManager(const JSONMonitorManager&) = delete;
+  JSONMonitorManager& operator=(const JSONMonitorManager&) = delete;
+
+  void RegisterFrame(RenderFrameImpl* frame, JsonCaptureClient* client);
+  void UnregisterFrame(RenderFrameImpl* frame);
+
+  // Global callback for V8
+  static void OnJSONStringify(const std::string& json_content, void* user_data);
+
+ private:
+  base::Lock lock_;
+  std::map<RenderFrameImpl*, JsonCaptureClient*> frame_clients_;
+};
+
 class JSONMonitor {
   public:
-    JSONMonitor() = default;
-    ~JSONMonitor() = default;
-    
-    void Initialize(RenderFrameImpl* render_frame);
-    static void OnJSONStringify(const std::string& json_content, void* user_data);
-    
+    explicit JSONMonitor(RenderFrameImpl* render_frame);
+    ~JSONMonitor();
+
+    void Initialize();
+
   private:
-    // 移除WebSocket客户端管理，使用全局函数
+    raw_ptr<RenderFrameImpl> render_frame_;
+    std::unique_ptr<JsonCaptureClient> capture_client_;
 };
 
 class JSONMonitorObserver : public RenderFrameObserver {

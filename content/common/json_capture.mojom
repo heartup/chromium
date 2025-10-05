@@ -1,0 +1,19 @@
+// Copyright 2025 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+module content.mojom;
+
+import "url/mojom/url.mojom";
+
+// Interface for JSON capture service
+// This service runs in the browser process and dispatches events to extensions
+interface JsonCaptureService {
+  // Notify browser of captured JSON data
+  NotifyJsonCapture(string json_content, url.mojom.Url source_url, int32 frame_id);
+
+  // Start/stop capturing (controlled by extension API)
+  StartCapturing() => (bool success);
+  StopCapturing() => (bool success);
+  IsCapturing() => (bool capturing);
+};

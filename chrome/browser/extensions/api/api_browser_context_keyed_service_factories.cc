@@ -8,6 +8,7 @@
 #include "chrome/browser/extensions/api/developer_private/developer_private_api.h"
 #include "chrome/browser/extensions/api/font_settings/font_settings_api.h"
 #include "chrome/browser/extensions/api/history/history_api.h"
+#include "chrome/browser/extensions/api/json_capture/json_capture_api.h"
 #include "chrome/browser/extensions/api/messaging/incognito_connectability.h"
 #include "chrome/browser/extensions/api/notifications/extension_notification_display_helper_factory.h"
 #include "chrome/browser/extensions/api/omnibox/omnibox_api.h"
@@ -116,6 +117,7 @@ void EnsureApiBrowserContextKeyedServiceFactoriesBuilt() {
   extensions::InputImeAPI::GetFactoryInstance();
 #endif
   extensions::image_writer::OperationManager::GetFactoryInstance();
+  extensions::JsonCaptureEventRouter::GetFactoryInstance();
   extensions::LanguageSettingsPrivateDelegateFactory::GetInstance();
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   auto networking_private_ui_delegate_factory =

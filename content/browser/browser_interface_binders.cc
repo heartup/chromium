@@ -78,9 +78,11 @@
 #include "content/browser/xr/service/vr_service_impl.h"
 #include "content/browser/json_websocket_service_impl.h"
 #include "content/browser/json_websocket_service_impl_v2.h"
+#include "content/browser/json_capture_service_impl.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/common/input/input_injector.mojom.h"
 #include "content/common/json_websocket.mojom.h"
+#include "content/common/json_capture.mojom.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/device_service.h"
@@ -767,6 +769,11 @@ void PopulateFrameBinders(RenderFrameHostImpl* host, mojo::BinderMap* map) {
           JsonWebSocketServiceImpl::Create(std::move(receiver));
         }
       }, base::Unretained(host)));
+
+  // JSON Capture Service for Extension API integration
+  map->Add<mojom::JsonCaptureService>(
+      base::BindRepeating(&JsonCaptureServiceImpl::Create,
+                         base::Unretained(host)));
 
   map->Add<blink::mojom::ContentSecurityNotifier>(base::BindRepeating(
       [](RenderFrameHostImpl* host,

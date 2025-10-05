@@ -1,0 +1,83 @@
+[
+  {
+    "namespace": "jsonCapture",
+    "description": "Capture JSON.stringify calls from web pages",
+    "types": [
+      {
+        "id": "JsonData",
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The stringified JSON content"
+          },
+          "url": {
+            "type": "string",
+            "description": "The URL where JSON.stringify was called"
+          },
+          "timestamp": {
+            "type": "number",
+            "description": "Timestamp in milliseconds since epoch"
+          },
+          "frameId": {
+            "type": "integer",
+            "description": "Frame ID where the call originated"
+          }
+        }
+      }
+    ],
+    "events": [
+      {
+        "name": "onData",
+        "type": "function",
+        "description": "Fired when JSON.stringify is intercepted",
+        "parameters": [
+          {
+            "name": "data",
+            "$ref": "JsonData",
+            "description": "The captured JSON data"
+          }
+        ]
+      }
+    ],
+    "functions": [
+      {
+        "name": "start",
+        "type": "function",
+        "description": "Start capturing JSON.stringify calls",
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "parameters": []
+        }
+      },
+      {
+        "name": "stop",
+        "type": "function",
+        "description": "Stop capturing JSON.stringify calls",
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "parameters": []
+        }
+      },
+      {
+        "name": "isCapturing",
+        "type": "function",
+        "description": "Check if currently capturing",
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "parameters": [
+            {
+              "name": "capturing",
+              "type": "boolean"
+            }
+          ]
+        }
+      }
+    ]
+  }
+]

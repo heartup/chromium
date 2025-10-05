@@ -77,6 +77,8 @@ target(link_target_type, "renderer") {
     "json_monitor_observer.h",
     "json_websocket_client.cc",
     "json_websocket_client.h",
+    "json_capture_client.cc",
+    "json_capture_client.h",
     "local_resource_url_loader_factory.cc",
     "local_resource_url_loader_factory.h",
     "media/audio_decoder.cc",

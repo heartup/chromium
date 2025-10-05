@@ -870,6 +870,10 @@
       "CF6B19571334F49878327D557597D23B1458AA39"   // https://crbug.com/1201800
     ]
   },
+  "jsonCapture": {
+    "channel": "stable",
+    "extension_types": ["extension"]
+  },
   "readingList": {
     "channel": "stable",
     "extension_types": ["extension"],
