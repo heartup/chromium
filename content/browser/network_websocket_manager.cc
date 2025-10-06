@@ -179,9 +179,16 @@ void NetworkWebSocketManager::Disconnect() {
   expected_auth_key_.clear();
   message_buffer_.clear();
 
-  // Clear any pending callbacks
-  connection_callback_.Reset();
-  message_callback_.Reset();
+  // IMPORTANT: Call pending callbacks before clearing them
+  // This prevents DCHECK failures in Mojo when callbacks are destroyed without being run
+  if (connection_callback_) {
+    LOG(WARNING) << "[NetworkWebSocket] Calling pending connection callback with failure";
+    std::move(connection_callback_).Run(false);
+  }
+  if (message_callback_) {
+    LOG(WARNING) << "[NetworkWebSocket] Calling pending message callback with failure";
+    std::move(message_callback_).Run(false);
+  }
 }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -345,8 +352,36 @@ void NetworkWebSocketManager::OnDropChannel(bool was_clean,
             << ", code=" << code << ", reason=" << reason;
 
   connected_ = false;
+  connecting_ = false;  // IMPORTANT: Reset connecting flag
   authenticated_ = false;
+  waiting_for_auth_ = false;
   StopHeartbeat();
+
+  // Cancel watchers before closing pipes
+  readable_watcher_.Cancel();
+  writable_watcher_.Cancel();
+
+  // Reset Mojo interfaces to prevent stale callbacks
+  websocket_.reset();
+  handshake_receiver_.reset();
+  client_receiver_.reset();
+  readable_pipe_.reset();
+  writable_pipe_.reset();
+
+  // Clear message buffer
+  message_buffer_.clear();
+  expected_auth_key_.clear();
+
+  // CRITICAL: Call any pending callbacks before reconnecting
+  // This prevents DCHECK failures when callbacks are destroyed without being run
+  if (connection_callback_) {
+    LOG(WARNING) << "[NetworkWebSocket] Calling pending connection callback with failure before reconnect";
+    std::move(connection_callback_).Run(false);
+  }
+  if (message_callback_) {
+    LOG(WARNING) << "[NetworkWebSocket] Calling pending message callback with failure before reconnect";
+    std::move(message_callback_).Run(false);
+  }
 
   // Auto-reconnect for any disconnection when in foreground
   // This ensures we maintain connection as long as browser is active
@@ -358,7 +393,9 @@ void NetworkWebSocketManager::OnDropChannel(bool was_clean,
 
 void NetworkWebSocketManager::OnClosingHandshake() {
   LOG(INFO) << "[NetworkWebSocket] Closing handshake received";
-  websocket_->StartClosingHandshake(1000, "");
+  if (websocket_) {
+    websocket_->StartClosingHandshake(1000, "");
+  }
 }
 
 // Heartbeat implementation
@@ -397,6 +434,7 @@ void NetworkWebSocketManager::HandleReconnect() {
 
   // Schedule reconnect with delay to avoid rapid loops
   // Use weak pointer to ensure safety if object is destroyed
+  // IMPORTANT: Pass a valid callback to ensure Mojo interfaces are properly handled
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&NetworkWebSocketManager::Connect,
@@ -404,7 +442,10 @@ void NetworkWebSocketManager::HandleReconnect() {
                     saved_url.host(),
                     saved_url.EffectiveIntPort(),
                     saved_url.path(),
-                    ConnectionCallback()),
+                    base::BindOnce([](bool success) {
+                      LOG(INFO) << "[NetworkWebSocket] Reconnect "
+                                << (success ? "succeeded" : "failed");
+                    })),
       base::Seconds(3));
 }
 
@@ -564,7 +605,13 @@ void NetworkWebSocketManager::OnDataPipeWritable(MojoResult result) {
         result == MOJO_RESULT_CANCELLED ||
         result == MOJO_RESULT_ABORTED) {
       LOG(ERROR) << "[NetworkWebSocket] Fatal write pipe error, triggering disconnection";
-      OnDropChannel(false, 1006, "Write pipe error");
+
+      // Only trigger OnDropChannel if we're actually connected
+      if (connected_ || connecting_) {
+        OnDropChannel(false, 1006, "Write pipe error");
+      } else {
+        LOG(INFO) << "[NetworkWebSocket] Ignoring write pipe error during non-connected state";
+      }
     }
     return;
   }
@@ -581,11 +628,19 @@ void NetworkWebSocketManager::OnDataPipeReadable(MojoResult result) {
     readable_watcher_.Cancel();
 
     // Handle disconnection if pipe error is fatal
+    // MOJO_RESULT_FAILED_PRECONDITION typically means the peer closed the pipe
     if (result == MOJO_RESULT_FAILED_PRECONDITION ||
         result == MOJO_RESULT_CANCELLED ||
         result == MOJO_RESULT_ABORTED) {
       LOG(ERROR) << "[NetworkWebSocket] Fatal pipe error, triggering disconnection";
-      OnDropChannel(false, 1006, "Read pipe error");
+
+      // Only trigger OnDropChannel if we're actually connected
+      // This prevents spurious reconnection attempts during shutdown or initialization
+      if (connected_ || connecting_) {
+        OnDropChannel(false, 1006, "Read pipe error");
+      } else {
+        LOG(INFO) << "[NetworkWebSocket] Ignoring pipe error during non-connected state";
+      }
     }
     return;
   }

@@ -87,9 +87,6 @@ bool WebSocketClient::Connect(const std::string& host, int port, const std::stri
   socket_fd_ = socket(AF_INET, SOCK_STREAM, 0);
   if (socket_fd_ == InvalidSocket) {
     LOG(ERROR) << "[WebSocket] Failed to create socket, error: " << SocketGetLastError();
-#if _WIN32
-    CleanupWinsock();
-#endif
     return false;
   }
 
@@ -99,9 +96,6 @@ bool WebSocketClient::Connect(const std::string& host, int port, const std::stri
     LOG(ERROR) << "[WebSocket] Failed to resolve hostname: " << host << ", error: " << SocketGetLastError();
     CloseSocket(socket_fd_);
     socket_fd_ = InvalidSocket;
-#if _WIN32
-    CleanupWinsock();
-#endif
     return false;
   }
 
@@ -122,9 +116,6 @@ bool WebSocketClient::Connect(const std::string& host, int port, const std::stri
     LOG(ERROR) << "[WebSocket] Failed to connect to server, error: " << SocketGetLastError();
     CloseSocket(socket_fd_);
     socket_fd_ = InvalidSocket;
-#if _WIN32
-    CleanupWinsock();
-#endif
     return false;
   }
 
@@ -132,9 +123,6 @@ bool WebSocketClient::Connect(const std::string& host, int port, const std::stri
   if (!PerformHandshake(host, path)) {
     CloseSocket(socket_fd_);
     socket_fd_ = InvalidSocket;
-#if _WIN32
-    CleanupWinsock();
-#endif
     return false;
   }
 
@@ -342,6 +330,63 @@ bool WebSocketClient::SendPing() {
   return true;
 }
 
+bool WebSocketClient::SendCloseFrame(uint16_t close_code, const std::string& reason) {
+  if (!connected_.load() || socket_fd_ == InvalidSocket) {
+    return false;
+  }
+
+  // 构建Close帧 (opcode = 0x08)
+  std::vector<uint8_t> frame;
+  frame.push_back(0x80 | 0x08);  // FIN + close frame
+
+  // 计算payload长度 (2字节close code + reason字符串)
+  size_t payload_length = 2 + reason.length();
+
+  if (payload_length < 126) {
+    frame.push_back(0x80 | static_cast<uint8_t>(payload_length));  // MASK + length
+  } else if (payload_length < 65536) {
+    frame.push_back(0x80 | 126);  // MASK + 126
+    frame.push_back((payload_length >> 8) & 0xFF);
+    frame.push_back(payload_length & 0xFF);
+  }
+
+  // 添加4字节掩码键
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<uint32_t> dis(0, 0xFFFFFFFF);
+  uint32_t mask_key = dis(gen);
+  frame.push_back((mask_key >> 24) & 0xFF);
+  frame.push_back((mask_key >> 16) & 0xFF);
+  frame.push_back((mask_key >> 8) & 0xFF);
+  frame.push_back(mask_key & 0xFF);
+
+  // 添加掩码后的payload (close code + reason)
+  // Close code (2 bytes, big-endian)
+  uint8_t code_bytes[2] = {static_cast<uint8_t>((close_code >> 8) & 0xFF),
+                           static_cast<uint8_t>(close_code & 0xFF)};
+  for (int i = 0; i < 2; i++) {
+    uint8_t mask_byte = (mask_key >> ((3 - (i % 4)) * 8)) & 0xFF;
+    frame.push_back(code_bytes[i] ^ mask_byte);
+  }
+
+  // Reason string
+  for (size_t i = 0; i < reason.length(); i++) {
+    uint8_t mask_byte = (mask_key >> ((3 - ((i + 2) % 4)) * 8)) & 0xFF;
+    frame.push_back(static_cast<uint8_t>(reason[i]) ^ mask_byte);
+  }
+
+  // 发送Close帧
+  ssize_t result = send(socket_fd_, reinterpret_cast<const char*>(frame.data()), static_cast<int>(frame.size()), 0);
+  if (result == SOCKET_ERROR) {
+    int error_code = SocketGetLastError();
+    LOG(ERROR) << "[WebSocket] Failed to send close frame, error: " << error_code;
+    return false;
+  }
+
+  LOG(INFO) << "[WebSocket] Sent close frame with code " << close_code << " and reason: " << reason;
+  return true;
+}
+
 bool WebSocketClient::ReceiveFrame() {
   if (!connected_.load() || socket_fd_ == InvalidSocket) {
     return false;
@@ -486,6 +531,79 @@ bool WebSocketClient::ReceiveFrame() {
     send(socket_fd_, reinterpret_cast<const char*>(pong_frame.data()), pong_frame.size(), 0);
     LOG(INFO) << "[WebSocket] Responded to ping with pong";
   }
+  // 如果是close帧(0x08)，处理关闭请求
+  else if (opcode == 0x08) {
+    // 读取完整的close帧
+    recv(socket_fd_, reinterpret_cast<char*>(header), 2, 0);
+
+    bool masked = (header[1] & 0x80) != 0;
+    uint64_t payload_length = header[1] & 0x7F;
+
+    // 读取扩展长度（如果需要）
+    if (payload_length == 126) {
+      uint8_t extended_length[2];
+      recv(socket_fd_, reinterpret_cast<char*>(extended_length), 2, 0);
+      UNSAFE_BUFFERS({
+        payload_length = (extended_length[0] << 8) | extended_length[1];
+      });
+    } else if (payload_length == 127) {
+      uint8_t extended_length[8];
+      recv(socket_fd_, reinterpret_cast<char*>(extended_length), 8, 0);
+      payload_length = 0;
+      UNSAFE_BUFFERS({
+        for (int i = 0; i < 8; i++) {
+          payload_length = (payload_length << 8) | extended_length[i];
+        }
+      });
+    }
+
+    // 读取掩码（如果有）
+    if (masked) {
+      uint8_t mask[4];
+      recv(socket_fd_, reinterpret_cast<char*>(mask), 4, 0);
+    }
+
+    // 读取close frame的payload (close code + reason)
+    uint16_t close_code = 1000;  // 默认正常关闭
+    std::string close_reason;
+
+    if (payload_length >= 2) {
+      uint8_t code_bytes[2];
+      recv(socket_fd_, reinterpret_cast<char*>(code_bytes), 2, 0);
+      close_code = (code_bytes[0] << 8) | code_bytes[1];
+
+      // 读取reason（如果有）
+      if (payload_length > 2) {
+        std::vector<uint8_t> reason_bytes(payload_length - 2);
+        recv(socket_fd_, reinterpret_cast<char*>(reason_bytes.data()), payload_length - 2, 0);
+        close_reason = std::string(reason_bytes.begin(), reason_bytes.end());
+      }
+    } else if (payload_length > 0) {
+      // 如果有payload但少于2字节，仍需要读取并丢弃
+      std::vector<uint8_t> discard(payload_length);
+      recv(socket_fd_, reinterpret_cast<char*>(discard.data()), payload_length, 0);
+    }
+
+    LOG(INFO) << "[WebSocket] Received close frame with code " << close_code
+              << " and reason: " << close_reason;
+
+    // 发送close frame响应
+    SendCloseFrame(close_code, "Client closing");
+
+    // 标记为断开连接
+    connected_ = false;
+
+    // 恢复阻塞模式后关闭socket
+    #ifdef _WIN32
+      u_long mode2 = 0;
+      ioctlsocket(socket_fd_, FIONBIO, &mode2);
+    #else
+      int flags2 = fcntl(socket_fd_, F_GETFL, 0);
+      fcntl(socket_fd_, F_SETFL, flags2 & ~O_NONBLOCK);
+    #endif
+
+    return false;  // 返回false表示连接已关闭
+  }
 
   // 恢复阻塞模式
   #ifdef _WIN32
@@ -591,15 +709,23 @@ void WebSocketClient::Disconnect() {
   // 加锁保护断开操作
   std::lock_guard<std::mutex> lock(connect_mutex_);
 
+  // 如果连接状态为true，发送close frame进行优雅关闭
+  if (connected_.load() && socket_fd_ != InvalidSocket) {
+    LOG(INFO) << "[WebSocket] Sending close frame before disconnect";
+    SendCloseFrame(1000, "Normal closure");
+    // 短暂等待以确保close frame发送完成
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+
   if (socket_fd_ != InvalidSocket) {
     CloseSocket(socket_fd_);
     socket_fd_ = InvalidSocket;
   }
   connected_ = false;
   mac_verified_ = false;  // 重置MAC验证状态
-#if _WIN32
-  CleanupWinsock();
-#endif
+
+  // 注意：不在这里调用WSACleanup，因为可能有其他WebSocket实例或网络操作在使用
+  // WSACleanup应该在程序结束时或确保没有其他网络操作时调用
 }
 
 bool WebSocketClient::IsConnected() const {
@@ -883,6 +1009,10 @@ void CleanupWebSocketClient() {
     delete client;
     client = nullptr;
   }
+#if _WIN32
+  // 在全局清理时才调用WSACleanup
+  CleanupWinsock();
+#endif
 }
 
 // 心跳机制实现

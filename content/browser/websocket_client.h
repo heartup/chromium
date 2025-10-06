@@ -65,7 +65,10 @@ class WebSocketClient {
   // 发送Ping帧
   bool SendPing();
 
-  // 接收并处理帧（用于处理ping/pong）
+  // 发送Close帧
+  bool SendCloseFrame(uint16_t close_code = 1000, const std::string& reason = "");
+
+  // 接收并处理帧（用于处理ping/pong/close）
   bool ReceiveFrame();
 
   // 接收字符串消息
