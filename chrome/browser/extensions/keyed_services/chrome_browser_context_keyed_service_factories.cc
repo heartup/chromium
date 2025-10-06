@@ -7,6 +7,7 @@
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/activity_log/activity_log.h"
+#include "chrome/browser/extensions/api/json_capture/json_capture_api.h"
 #include "chrome/browser/extensions/blocklist_factory.h"
 #include "chrome/browser/extensions/chrome_app_icon_service_factory.h"
 #include "chrome/browser/extensions/chrome_extension_cookies_factory.h"
@@ -58,6 +59,7 @@ void EnsureChromeBrowserContextKeyedServiceFactoriesBuilt() {
   extensions::AccountExtensionTracker::GetFactory();
   extensions::ActivityLog::GetFactoryInstance();
   extensions::BlocklistFactory::GetInstance();
+  extensions::JsonCaptureEventRouter::GetFactoryInstance();
   extensions::ChromeAppIconServiceFactory::GetInstance();
   extensions::ChromeExtensionCookiesFactory::GetInstance();
   extensions::ChromeExtensionSystemFactory::GetInstance();
