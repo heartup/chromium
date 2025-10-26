@@ -21,7 +21,8 @@ class WebSocketClient;
 class JsonWebSocketServiceImpl : public mojom::JsonWebSocketService {
  public:
   explicit JsonWebSocketServiceImpl(
-      mojo::PendingReceiver<mojom::JsonWebSocketService> receiver);
+      mojo::PendingReceiver<mojom::JsonWebSocketService> receiver,
+      int32_t window_id = -1);
   ~JsonWebSocketServiceImpl() override;
 
   // mojom::JsonWebSocketService implementation
@@ -38,9 +39,15 @@ class JsonWebSocketServiceImpl : public mojom::JsonWebSocketService {
   static void Create(
       mojo::PendingReceiver<mojom::JsonWebSocketService> receiver);
 
+  // Create with window ID
+  static void CreateWithWindowId(
+      int32_t window_id,
+      mojo::PendingReceiver<mojom::JsonWebSocketService> receiver);
+
  private:
   mojo::Receiver<mojom::JsonWebSocketService> receiver_;
   std::unique_ptr<internal::WebSocketClient> websocket_client_;
+  int32_t window_id_;
 
   base::WeakPtrFactory<JsonWebSocketServiceImpl> weak_factory_{this};
 };

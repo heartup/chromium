@@ -756,15 +756,22 @@ void PopulateFrameBinders(RenderFrameHostImpl* host, mojo::BinderMap* map) {
   map->Add<mojom::JsonWebSocketService>(
       base::BindRepeating([](RenderFrameHostImpl* host,
                              mojo::PendingReceiver<mojom::JsonWebSocketService> receiver) {
+        // Get window identifier from the RenderFrameHost
+        // Use routing_id as a unique identifier for the frame/window
+        int32_t window_id = host->GetRoutingID();
+
         auto* storage_partition = host->GetStoragePartition();
         if (storage_partition && storage_partition->GetNetworkContext()) {
           // Use new V2 implementation with NetworkContext
-          JsonWebSocketServiceImplV2::Create(
+          // Pass window_id to identify which window/tab the message comes from
+          JsonWebSocketServiceImplV2::CreateWithWindowId(
+              window_id,
               storage_partition->GetNetworkContext(),
               std::move(receiver));
         } else {
           // Fallback to original implementation if NetworkContext unavailable
-          JsonWebSocketServiceImpl::Create(std::move(receiver));
+          // Pass window_id to identify which window/tab the message comes from
+          JsonWebSocketServiceImpl::CreateWithWindowId(window_id, std::move(receiver));
         }
       }, base::Unretained(host)));
 

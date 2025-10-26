@@ -18,6 +18,8 @@
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/command_line.h"
+#include "base/json/json_writer.h"
+#include "base/values.h"
 #include "content/public/common/content_switches.h"
 
 #if _WIN32
@@ -1000,6 +1002,28 @@ bool SendJsonToWebSocket(const std::string& json_message) {
   }
 
   return result;
+}
+
+bool SendJsonToWebSocketWithWindowId(int32_t window_id, const std::string& json_message) {
+  LOG(INFO) << "[WebSocket] SendJsonToWebSocketWithWindowId called, window_id: " << window_id
+            << ", message size: " << json_message.size();
+
+  // 创建包含窗口ID和原始消息的结构
+  base::Value::Dict wrapper;
+  wrapper.Set("window_id", window_id);
+  wrapper.Set("message", json_message);
+
+  // 序列化为JSON字符串
+  std::string wrapped_json;
+  if (!base::JSONWriter::Write(wrapper, &wrapped_json)) {
+    LOG(ERROR) << "[WebSocket] Failed to serialize message wrapper to JSON";
+    return false;
+  }
+
+  LOG(INFO) << "[WebSocket] Wrapped message size: " << wrapped_json.size();
+
+  // 使用原有的发送函数发送包装后的消息
+  return SendJsonToWebSocket(wrapped_json);
 }
 
 void CleanupWebSocketClient() {

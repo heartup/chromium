@@ -4,6 +4,15 @@
 
 module content.mojom;
 
+// Message wrapper that includes window ID and the original JSON message
+struct WebSocketMessageWithWindowId {
+  // Chrome browser window ID
+  int32 window_id;
+
+  // Original JSON message string
+  string json_message;
+};
+
 // Interface for JSON WebSocket forwarding service
 // This service runs in the browser process and handles WebSocket connections
 // on behalf of the renderer process (which is sandboxed)

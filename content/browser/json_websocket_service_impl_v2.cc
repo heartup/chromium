@@ -6,8 +6,10 @@
 
 #include "base/command_line.h"
 #include "base/functional/bind.h"
+#include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/values.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_switches.h"
@@ -19,15 +21,26 @@ void JsonWebSocketServiceImplV2::Create(
     network::mojom::NetworkContext* network_context,
     mojo::PendingReceiver<mojom::JsonWebSocketService> receiver) {
   // Create self-managed instance
-  new JsonWebSocketServiceImplV2(network_context, std::move(receiver));
+  new JsonWebSocketServiceImplV2(network_context, std::move(receiver), -1);
+}
+
+// static
+void JsonWebSocketServiceImplV2::CreateWithWindowId(
+    int32_t window_id,
+    network::mojom::NetworkContext* network_context,
+    mojo::PendingReceiver<mojom::JsonWebSocketService> receiver) {
+  // Create self-managed instance with window ID
+  new JsonWebSocketServiceImplV2(network_context, std::move(receiver), window_id);
 }
 
 JsonWebSocketServiceImplV2::JsonWebSocketServiceImplV2(
     network::mojom::NetworkContext* network_context,
-    mojo::PendingReceiver<mojom::JsonWebSocketService> receiver)
+    mojo::PendingReceiver<mojom::JsonWebSocketService> receiver,
+    int32_t window_id)
     : network_context_(network_context),
-      receiver_(this, std::move(receiver)) {
-  LOG(INFO) << "[JsonWebSocketV2] Service created with network context";
+      receiver_(this, std::move(receiver)),
+      window_id_(window_id) {
+  LOG(INFO) << "[JsonWebSocketV2] Service created with network context, window_id: " << window_id_;
 
   // Create WebSocket manager
   websocket_manager_ = std::make_unique<NetworkWebSocketManager>(network_context_);
@@ -81,7 +94,8 @@ void JsonWebSocketServiceImplV2::Connect(const std::string& host,
 void JsonWebSocketServiceImplV2::SendJsonMessage(
     const std::string& json_message,
     SendJsonMessageCallback callback) {
-  LOG(INFO) << "[JsonWebSocketV2] Send message request, size: " << json_message.size();
+  LOG(INFO) << "[JsonWebSocketV2] Send message request, size: " << json_message.size()
+            << ", window_id: " << window_id_;
 
   if (!websocket_manager_->IsConnected()) {
     LOG(WARNING) << "[JsonWebSocketV2] Not connected";
@@ -89,9 +103,24 @@ void JsonWebSocketServiceImplV2::SendJsonMessage(
     return;
   }
 
-  // Send message through network WebSocket manager
+  // Wrap message with window ID
+  base::Value::Dict wrapper;
+  wrapper.Set("window_id", window_id_);
+  wrapper.Set("message", json_message);
+
+  // Serialize to JSON string
+  std::string wrapped_json;
+  if (!base::JSONWriter::Write(wrapper, &wrapped_json)) {
+    LOG(ERROR) << "[JsonWebSocketV2] Failed to serialize message wrapper to JSON";
+    std::move(callback).Run(false);
+    return;
+  }
+
+  LOG(INFO) << "[JsonWebSocketV2] Wrapped message size: " << wrapped_json.size();
+
+  // Send wrapped message through network WebSocket manager
   websocket_manager_->SendMessage(
-      json_message,
+      wrapped_json,
       base::BindOnce(&JsonWebSocketServiceImplV2::OnMessageSendResult,
                     weak_factory_.GetWeakPtr(), std::move(callback)));
 }

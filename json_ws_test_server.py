@@ -120,10 +120,7 @@ async def handle_message(websocket, message):
     print(f"消息长度: {len(message)} 字节")
 
     # 只打印前500个字符，避免输出过长
-    if len(message) > 500:
-        print(f"消息内容(前500字符): {message[:500]}...")
-    else:
-        print(f"消息内容: {message}")
+    print(f"消息内容: {message}")
     print("=" * 40)
 
     # 立即刷新输出缓冲区，确保日志立即显示

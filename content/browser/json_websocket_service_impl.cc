@@ -61,9 +61,10 @@ class WebSocketClient {
 }  // namespace internal
 
 JsonWebSocketServiceImpl::JsonWebSocketServiceImpl(
-    mojo::PendingReceiver<mojom::JsonWebSocketService> receiver)
-    : receiver_(this, std::move(receiver)) {
-  LOG(INFO) << "[Browser] JsonWebSocketServiceImpl created";
+    mojo::PendingReceiver<mojom::JsonWebSocketService> receiver,
+    int32_t window_id)
+    : receiver_(this, std::move(receiver)), window_id_(window_id) {
+  LOG(INFO) << "[Browser] JsonWebSocketServiceImpl created with window_id: " << window_id_;
 }
 
 JsonWebSocketServiceImpl::~JsonWebSocketServiceImpl() {
@@ -113,7 +114,8 @@ void JsonWebSocketServiceImpl::Connect(const std::string& host,
 
 void JsonWebSocketServiceImpl::SendJsonMessage(const std::string& json_message,
                                                SendJsonMessageCallback callback) {
-  LOG(INFO) << "[Browser] IPC: SendJsonMessage request received, size: " << json_message.size();
+  LOG(INFO) << "[Browser] IPC: SendJsonMessage request received, size: " << json_message.size()
+            << ", window_id: " << window_id_;
 
   if (!websocket_client_ || !websocket_client_->IsConnected()) {
     LOG(WARNING) << "[Browser] WebSocket not connected";
@@ -121,7 +123,8 @@ void JsonWebSocketServiceImpl::SendJsonMessage(const std::string& json_message,
     return;
   }
 
-  bool success = websocket_client_->SendMessage(json_message);
+  // 使用带窗口ID的发送函数
+  bool success = blink::internal::SendJsonToWebSocketWithWindowId(window_id_, json_message);
   std::move(callback).Run(success);
 }
 
@@ -143,7 +146,16 @@ void JsonWebSocketServiceImpl::Create(
     mojo::PendingReceiver<mojom::JsonWebSocketService> receiver) {
   // This creates a self-owned instance that will be deleted when the
   // mojo connection is closed
-  new JsonWebSocketServiceImpl(std::move(receiver));
+  new JsonWebSocketServiceImpl(std::move(receiver), -1);
+}
+
+// static
+void JsonWebSocketServiceImpl::CreateWithWindowId(
+    int32_t window_id,
+    mojo::PendingReceiver<mojom::JsonWebSocketService> receiver) {
+  // This creates a self-owned instance that will be deleted when the
+  // mojo connection is closed
+  new JsonWebSocketServiceImpl(std::move(receiver), window_id);
 }
 
 }  // namespace content
