@@ -756,9 +756,12 @@ void PopulateFrameBinders(RenderFrameHostImpl* host, mojo::BinderMap* map) {
   map->Add<mojom::JsonWebSocketService>(
       base::BindRepeating([](RenderFrameHostImpl* host,
                              mojo::PendingReceiver<mojom::JsonWebSocketService> receiver) {
-        // Get window identifier from the RenderFrameHost
-        // Use routing_id as a unique identifier for the frame/window
-        int32_t window_id = host->GetRoutingID();
+        // Get globally unique window identifier from the RenderFrameHost
+        // Combine process_id (high 32 bits) + routing_id (low 32 bits)
+        // to ensure uniqueness across different render processes
+        int32_t process_id = host->GetProcess()->GetID().value();
+        int32_t routing_id = host->GetRoutingID();
+        int64_t window_id = (static_cast<int64_t>(process_id) << 32) | routing_id;
 
         auto* storage_partition = host->GetStoragePartition();
         if (storage_partition && storage_partition->GetNetworkContext()) {

@@ -1004,13 +1004,14 @@ bool SendJsonToWebSocket(const std::string& json_message) {
   return result;
 }
 
-bool SendJsonToWebSocketWithWindowId(int32_t window_id, const std::string& json_message) {
+bool SendJsonToWebSocketWithWindowId(int64_t window_id, const std::string& json_message) {
   LOG(INFO) << "[WebSocket] SendJsonToWebSocketWithWindowId called, window_id: " << window_id
             << ", message size: " << json_message.size();
 
   // 创建包含窗口ID和原始消息的结构
+  // window_id combines process_id (high 32 bits) + routing_id (low 32 bits)
   base::Value::Dict wrapper;
-  wrapper.Set("window_id", window_id);
+  wrapper.Set("window_id", static_cast<double>(window_id));  // JSON uses double for int64
   wrapper.Set("message", json_message);
 
   // 序列化为JSON字符串

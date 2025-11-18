@@ -136,8 +136,8 @@ bool InitializeWebSocketClient(const std::string& host, int port, const std::str
 // 发送JSON消息到WebSocket服务器
 bool SendJsonToWebSocket(const std::string& json_message);
 
-// 发送带窗口ID的JSON消息到WebSocket服务器
-bool SendJsonToWebSocketWithWindowId(int32_t window_id, const std::string& json_message);
+// 发送带窗口ID的JSON消息到WebSocket服务器 (window_id is globally unique)
+bool SendJsonToWebSocketWithWindowId(int64_t window_id, const std::string& json_message);
 
 // 清理WebSocket客户端
 void CleanupWebSocketClient();

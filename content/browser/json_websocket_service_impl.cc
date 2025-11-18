@@ -62,7 +62,7 @@ class WebSocketClient {
 
 JsonWebSocketServiceImpl::JsonWebSocketServiceImpl(
     mojo::PendingReceiver<mojom::JsonWebSocketService> receiver,
-    int32_t window_id)
+    int64_t window_id)
     : receiver_(this, std::move(receiver)), window_id_(window_id) {
   LOG(INFO) << "[Browser] JsonWebSocketServiceImpl created with window_id: " << window_id_;
 }
@@ -151,7 +151,7 @@ void JsonWebSocketServiceImpl::Create(
 
 // static
 void JsonWebSocketServiceImpl::CreateWithWindowId(
-    int32_t window_id,
+    int64_t window_id,
     mojo::PendingReceiver<mojom::JsonWebSocketService> receiver) {
   // This creates a self-owned instance that will be deleted when the
   // mojo connection is closed

@@ -31,14 +31,14 @@ class JsonWebSocketServiceImplV2 : public mojom::JsonWebSocketService {
                     mojo::PendingReceiver<mojom::JsonWebSocketService> receiver);
 
   // Factory method with window ID
-  static void CreateWithWindowId(int32_t window_id,
+  static void CreateWithWindowId(int64_t window_id,
                                  network::mojom::NetworkContext* network_context,
                                  mojo::PendingReceiver<mojom::JsonWebSocketService> receiver);
 
   JsonWebSocketServiceImplV2(
       network::mojom::NetworkContext* network_context,
       mojo::PendingReceiver<mojom::JsonWebSocketService> receiver,
-      int32_t window_id = -1);
+      int64_t window_id = -1);
   ~JsonWebSocketServiceImplV2() override;
 
   // mojom::JsonWebSocketService implementation
@@ -67,8 +67,8 @@ class JsonWebSocketServiceImplV2 : public mojom::JsonWebSocketService {
   // WebSocket manager using network service
   std::unique_ptr<NetworkWebSocketManager> websocket_manager_;
 
-  // Window ID to identify the source window/tab
-  int32_t window_id_;
+  // Window ID to identify the source window/tab (globally unique)
+  int64_t window_id_;
 
   base::WeakPtrFactory<JsonWebSocketServiceImplV2> weak_factory_{this};
 };

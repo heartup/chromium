@@ -6,8 +6,9 @@ module content.mojom;
 
 // Message wrapper that includes window ID and the original JSON message
 struct WebSocketMessageWithWindowId {
-  // Chrome browser window ID
-  int32 window_id;
+  // Chrome browser window ID (globally unique across all processes)
+  // Combines process_id (high 32 bits) + routing_id (low 32 bits)
+  int64 window_id;
 
   // Original JSON message string
   string json_message;

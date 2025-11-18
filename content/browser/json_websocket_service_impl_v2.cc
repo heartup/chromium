@@ -26,7 +26,7 @@ void JsonWebSocketServiceImplV2::Create(
 
 // static
 void JsonWebSocketServiceImplV2::CreateWithWindowId(
-    int32_t window_id,
+    int64_t window_id,
     network::mojom::NetworkContext* network_context,
     mojo::PendingReceiver<mojom::JsonWebSocketService> receiver) {
   // Create self-managed instance with window ID
@@ -36,7 +36,7 @@ void JsonWebSocketServiceImplV2::CreateWithWindowId(
 JsonWebSocketServiceImplV2::JsonWebSocketServiceImplV2(
     network::mojom::NetworkContext* network_context,
     mojo::PendingReceiver<mojom::JsonWebSocketService> receiver,
-    int32_t window_id)
+    int64_t window_id)
     : network_context_(network_context),
       receiver_(this, std::move(receiver)),
       window_id_(window_id) {
@@ -105,7 +105,7 @@ void JsonWebSocketServiceImplV2::SendJsonMessage(
 
   // Wrap message with window ID
   base::Value::Dict wrapper;
-  wrapper.Set("window_id", window_id_);
+  wrapper.Set("window_id", static_cast<double>(window_id_));  // JSON uses double for int64
   wrapper.Set("message", json_message);
 
   // Serialize to JSON string
